@@ -2,6 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 import pandas as pd
 import io
+import unicodedata
+
+
+def _norm(s: str) -> str:
+    """Elimina acentos y pasa a minúsculas para comparación flexible."""
+    return unicodedata.normalize('NFKD', str(s)).encode('ascii', 'ignore').decode('ascii').lower().strip()
 
 from ...core.database import get_db
 from ...core.deps import get_current_user, require_admin
@@ -72,23 +78,24 @@ def cargar_maestro_syngenta(
     content = file.file.read()
     df = pd.read_excel(io.BytesIO(content), dtype=str)
 
-    # Detectar columna de nombre
-    cols_lower = {c.lower(): c for c in df.columns}
+    # Detectar columna de nombre (con normalización de acentos)
+    cols_norm = {_norm(c): c for c in df.columns}
     col_nombre = None
-    for kw in ["nombre", "producto", "descripcion", "estandar"]:
-        for cl, co in cols_lower.items():
-            if kw in cl:
+    for kw in ["nombre", "producto", "descripcion", "homogenea", "estandar", "articulo"]:
+        for cn, co in cols_norm.items():
+            if kw in cn:
                 col_nombre = co
                 break
         if col_nombre:
             break
 
     if not col_nombre:
-        raise HTTPException(status_code=400, detail="No se encontró columna de nombre de producto")
+        # Último recurso: usar la primera columna
+        col_nombre = df.columns[0]
 
-    col_codigo = next((co for cl, co in cols_lower.items() if "codigo" in cl or "código" in cl), None)
-    col_pa = next((co for cl, co in cols_lower.items() if "principio" in cl or "activo" in cl), None)
-    col_cat = next((co for cl, co in cols_lower.items() if "categor" in cl), None)
+    col_codigo = next((co for cn, co in cols_norm.items() if "codigo" in cn), None)
+    col_pa = next((co for cn, co in cols_norm.items() if "principio" in cn or "activo" in cn), None)
+    col_cat = next((co for cn, co in cols_norm.items() if "categor" in cn), None)
 
     # Marcar todos los anteriores como inactivos
     db.query(MaestroSyngenta).update({"is_active": False})
@@ -145,9 +152,15 @@ def cargar_glosario(
     content = file.file.read()
     df = pd.read_excel(io.BytesIO(content), dtype=str)
 
-    cols_lower = {c.lower(): c for c in df.columns}
-    col_orig = next((co for cl, co in cols_lower.items() if "original" in cl), None)
-    col_est = next((co for cl, co in cols_lower.items() if "estandar" in cl or "estándar" in cl), None)
+    cols_norm = {_norm(c): c for c in df.columns}
+    col_orig = next(
+        (co for cn, co in cols_norm.items() if "original" in cn or "articulo" in cn or "facturado" in cn),
+        None,
+    )
+    col_est = next(
+        (co for cn, co in cols_norm.items() if "estandar" in cn or "glosario" in cn or "nombre" in cn),
+        None,
+    )
 
     if not col_orig or not col_est:
         if len(df.columns) >= 2:
