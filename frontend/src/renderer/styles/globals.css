@@ -1,0 +1,94 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family: 'Inter', 'Calibri', system-ui, sans-serif;
+    background-color: #F5F6F8;
+    color: #1A1A2E;
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+
+  input, textarea, select {
+    user-select: text;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #F0F4F8;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #C0C8D2;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #8A9BB0;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-oag-blue text-white px-4 py-2 text-sm font-medium rounded hover:bg-blue-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-white text-oag-text border border-oag-border px-4 py-2 text-sm font-medium rounded hover:bg-gray-50 transition-colors;
+  }
+
+  .btn-danger {
+    @apply bg-oag-error text-white px-4 py-2 text-sm font-medium rounded hover:bg-red-700 transition-colors;
+  }
+
+  .card {
+    @apply bg-white border border-oag-border rounded-lg;
+  }
+
+  .table-header {
+    @apply bg-oag-dark text-white text-xs font-semibold uppercase tracking-wide px-3 py-2;
+  }
+
+  .table-cell {
+    @apply px-3 py-2 text-xs border-b border-oag-border;
+  }
+
+  .table-row-zebra:nth-child(even) {
+    @apply bg-oag-zebra;
+  }
+
+  .input-field {
+    @apply border border-oag-border rounded px-3 py-2 text-sm w-full focus:outline-none focus:ring-1 focus:ring-oag-blue bg-white;
+  }
+
+  .label {
+    @apply text-xs font-medium text-oag-muted uppercase tracking-wide mb-1 block;
+  }
+
+  .badge-ok {
+    @apply inline-block bg-green-100 text-green-800 text-xs px-2 py-0.5 rounded font-medium;
+  }
+
+  .badge-error {
+    @apply inline-block bg-red-100 text-red-800 text-xs px-2 py-0.5 rounded font-medium;
+  }
+
+  .badge-warning {
+    @apply inline-block bg-yellow-100 text-yellow-800 text-xs px-2 py-0.5 rounded font-medium;
+  }
+
+  .section-title {
+    @apply text-sm font-semibold text-oag-text uppercase tracking-wide border-b border-oag-border pb-2 mb-4;
+  }
+}

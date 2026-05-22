@@ -1,0 +1,238 @@
+"""
+Paso 2 — Análisis Producto Ventas
+Ranking clientes, ranking productos, muestreo, clasificación agroquímicos,
+tabla de apertura.
+"""
+import os
+import random
+import pandas as pd
+import numpy as np
+from typing import List, Dict, Optional
+
+from ..ai.clasificador import clasificar_productos
+from ..core.config import settings
+from .paso1_service import normalizar_tipo_comprobante, normalizar_monto
+
+MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+         "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+
+
+def ejecutar_paso2(
+    path_bajada_norm: str,
+    maestro_syngenta: List[str],
+    clientes_especiales: List[str],
+    expediente_id: int,
+    anio_analisis: int,
+) -> dict:
+    """
+    Ejecuta todos los sub-reportes del Paso 2.
+    """
+    df = pd.read_excel(path_bajada_norm)
+    df = _preparar_df(df, anio_analisis)
+
+    upload_dir = os.path.join(settings.UPLOAD_DIR, str(expediente_id))
+    os.makedirs(upload_dir, exist_ok=True)
+
+    # 1. Ranking clientes
+    ranking_clientes = _ranking_clientes(df)
+
+    # 2. Ranking productos
+    ranking_productos = _ranking_productos(df)
+
+    # 3. Muestreo
+    muestreo = _generar_muestreo(df, ranking_clientes, ranking_productos, clientes_especiales)
+
+    # 4. Clasificación con IA
+    productos_unicos = df["articulo"].dropna().unique().tolist()
+    clasificaciones = clasificar_productos(productos_unicos, maestro_syngenta)
+    clasificacion_map = {c["producto"]: c for c in clasificaciones}
+
+    # 5. Reporte de clasificación
+    reporte_clasificacion = [
+        {
+            "articulo": c["producto"],
+            "agroquimico": c["agroquimico"],
+            "syngenta": c["syngenta"],
+            "justificacion": c.get("justificacion", ""),
+        }
+        for c in clasificaciones
+    ]
+
+    # 6. Filtro agroquímicos
+    productos_agro = {c["producto"] for c in clasificaciones if c["agroquimico"] == "SI"}
+    df_agro = df[df["articulo"].isin(productos_agro)].copy()
+
+    # 7. Tabla de apertura
+    tabla_apertura = _tabla_apertura(df_agro, clasificacion_map, anio_analisis)
+
+    # Guardar archivos intermedios
+    path_agro = os.path.join(upload_dir, "bajada_agroquimicos.xlsx")
+    df_agro.to_excel(path_agro, index=False)
+
+    return {
+        "ranking_clientes": ranking_clientes,
+        "ranking_productos": ranking_productos,
+        "muestreo": muestreo,
+        "clasificacion": reporte_clasificacion,
+        "tabla_apertura": tabla_apertura,
+        "agroquimicos_path": path_agro,
+        "totales": {
+            "total_facturado_usd": round(df["monto_usd"].sum(), 2),
+            "total_agro_usd": round(df_agro["monto_usd"].sum(), 2),
+            "cant_productos": len(productos_unicos),
+            "cant_productos_agro": len(productos_agro),
+        },
+    }
+
+
+def _preparar_df(df: pd.DataFrame, anio: int) -> pd.DataFrame:
+    """Normaliza tipos y filtra por año."""
+    df = df.copy()
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df = df[df["fecha"].dt.year == anio] if anio else df
+    df["monto_usd"] = pd.to_numeric(df.get("monto_usd", df.get("monto_total", 0)), errors="coerce").fillna(0)
+    df["mes"] = df["fecha"].dt.month
+    df["articulo"] = df["articulo"].fillna("SIN DESCRIPCIÓN").astype(str).str.strip().str.upper()
+    df["cliente"] = df["cliente"].fillna("SIN NOMBRE").astype(str).str.strip().str.upper()
+    return df
+
+
+def _ranking_clientes(df: pd.DataFrame) -> List[Dict]:
+    grouped = (
+        df.groupby("cliente")["monto_usd"]
+        .sum()
+        .reset_index()
+        .rename(columns={"monto_usd": "total_usd"})
+        .sort_values("total_usd", ascending=False)
+    )
+    total = grouped["total_usd"].sum()
+    grouped["porcentaje"] = (grouped["total_usd"] / total * 100).round(2) if total else 0
+    grouped["total_usd"] = grouped["total_usd"].round(2)
+    return grouped.to_dict(orient="records")
+
+
+def _ranking_productos(df: pd.DataFrame) -> List[Dict]:
+    grouped = (
+        df.groupby("articulo")["monto_usd"]
+        .sum()
+        .reset_index()
+        .rename(columns={"monto_usd": "total_usd"})
+        .sort_values("total_usd", ascending=False)
+    )
+    total = grouped["total_usd"].sum()
+    grouped["porcentaje"] = (grouped["total_usd"] / total * 100).round(2) if total else 0
+    grouped["total_usd"] = grouped["total_usd"].round(2)
+    return grouped.to_dict(orient="records")
+
+
+def _generar_muestreo(
+    df: pd.DataFrame,
+    ranking_clientes: List[Dict],
+    ranking_productos: List[Dict],
+    clientes_especiales: List[str],
+    n_muestras: int = 70,
+) -> List[Dict]:
+    """
+    Selecciona 70 comprobantes de forma aleatoria ponderada entre
+    principales clientes y productos. Incluye forzados de clientes_especiales.
+    """
+    # Top 10 clientes y top 10 productos (80% de la selección)
+    top_clientes = {r["cliente"] for r in ranking_clientes[:10]}
+    top_productos = {r["articulo"] for r in ranking_productos[:10]}
+
+    # Normalizar clientes especiales
+    especiales = {c.upper().strip() for c in clientes_especiales}
+
+    # Pool principal: registros de top clientes o top productos
+    mask_principal = (
+        df["cliente"].isin(top_clientes) |
+        df["articulo"].isin(top_productos) |
+        df["cliente"].isin(especiales)
+    )
+    df_pool = df[mask_principal].copy()
+
+    if len(df_pool) == 0:
+        df_pool = df.copy()
+
+    # Comprobantes únicos del pool (agrupar por número de comprobante)
+    comp_cols = ["numero_comprobante", "tipo_comprobante", "fecha", "cliente", "monto_usd"]
+    available_cols = [c for c in comp_cols if c in df_pool.columns]
+    df_comp = df_pool[available_cols].drop_duplicates(
+        subset=[c for c in ["numero_comprobante", "tipo_comprobante"] if c in available_cols]
+    )
+
+    # Forzar clientes especiales
+    df_especiales = df_comp[df_comp.get("cliente", pd.Series(dtype=str)).isin(especiales)]
+    df_resto = df_comp[~df_comp.index.isin(df_especiales.index)]
+
+    # Muestra aleatoria del resto
+    n_resto = max(0, n_muestras - len(df_especiales))
+    if len(df_resto) > n_resto:
+        df_muestra = pd.concat([df_especiales, df_resto.sample(n=n_resto, random_state=42)])
+    else:
+        df_muestra = pd.concat([df_especiales, df_resto])
+
+    df_muestra = df_muestra.head(n_muestras)
+
+    result = []
+    for _, row in df_muestra.iterrows():
+        result.append({
+            "fecha": str(row.get("fecha", ""))[:10],
+            "tipo_comprobante": str(row.get("tipo_comprobante", "")),
+            "numero_comprobante": str(row.get("numero_comprobante", "")),
+            "cliente": str(row.get("cliente", "")),
+            "monto_usd": round(float(row.get("monto_usd", 0)), 2),
+            "es_especial": str(row.get("cliente", "")) in especiales,
+        })
+
+    return result
+
+
+def _tabla_apertura(df_agro: pd.DataFrame, clasificacion_map: dict, anio: int) -> List[Dict]:
+    """
+    Genera tabla de apertura: producto | Syngenta SI/NO | 12 meses | Total
+    Solo agroquímicos, montos netos en USD.
+    """
+    if df_agro.empty:
+        return []
+
+    # Usar monto neto si existe, sino total
+    col_monto = "monto_neto" if "monto_neto" in df_agro.columns else "monto_usd"
+    if col_monto == "monto_neto":
+        # Convertir monto_neto a USD si no está ya
+        df_agro = df_agro.copy()
+        df_agro["monto_apertura"] = pd.to_numeric(df_agro["monto_neto"], errors="coerce").fillna(0)
+    else:
+        df_agro = df_agro.copy()
+        df_agro["monto_apertura"] = df_agro["monto_usd"]
+
+    pivot = df_agro.pivot_table(
+        index="articulo",
+        columns="mes",
+        values="monto_apertura",
+        aggfunc="sum",
+        fill_value=0,
+    ).reset_index()
+
+    result = []
+    for _, row in pivot.iterrows():
+        producto = str(row["articulo"])
+        clasif = clasificacion_map.get(producto, {})
+        es_syngenta = clasif.get("syngenta", "NO")
+
+        meses_vals = {}
+        for m in range(1, 13):
+            meses_vals[MESES[m - 1]] = round(float(row.get(m, 0)), 2)
+
+        total = round(sum(meses_vals.values()), 2)
+
+        result.append({
+            "articulo": producto,
+            "syngenta": es_syngenta,
+            **meses_vals,
+            "Total": total,
+        })
+
+    # Ordenar por Total descendente
+    result.sort(key=lambda x: x["Total"], reverse=True)
+    return result

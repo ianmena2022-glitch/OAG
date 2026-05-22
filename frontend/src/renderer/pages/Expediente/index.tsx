@@ -1,0 +1,106 @@
+import React, { useState } from 'react'
+import { useParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { expedientesAPI } from '../../lib/api'
+import { cn, PASO_LABELS } from '../../lib/utils'
+import { Loader, CheckCircle, Circle, ArrowRight } from 'lucide-react'
+import Paso1 from './Paso1'
+import Paso2 from './Paso2'
+import Paso3 from './Paso3'
+import Paso4 from './Paso4'
+import Paso5 from './Paso5'
+import Paso6 from './Paso6'
+
+const PASO_COMPONENTS: Record<number, React.ComponentType<{ expediente: any }>> = {
+  1: Paso1,
+  2: Paso2,
+  3: Paso3,
+  4: Paso4,
+  5: Paso5,
+  6: Paso6,
+}
+
+const ESTADO_COLORS: Record<string, string> = {
+  BORRADOR: 'bg-gray-100 text-gray-700',
+  EN_PROCESO: 'bg-blue-100 text-blue-700',
+  COMPLETADO: 'bg-green-100 text-green-700',
+}
+
+export default function ExpedientePage() {
+  const { id } = useParams<{ id: string }>()
+  const [pasoActivo, setPasoActivo] = useState(1)
+
+  const { data: expediente, isLoading, refetch } = useQuery({
+    queryKey: ['expediente', id],
+    queryFn: () => expedientesAPI.obtener(Number(id)).then((r) => r.data),
+    refetchInterval: 5000,
+  })
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader size={24} className="animate-spin text-oag-muted" />
+      </div>
+    )
+  }
+
+  if (!expediente) return <div>Expediente no encontrado</div>
+
+  const PasoComponent = PASO_COMPONENTS[pasoActivo]
+
+  return (
+    <div className="flex gap-6 h-full">
+      {/* Sidebar de pasos */}
+      <div className="w-52 flex-shrink-0">
+        <div className="card p-4 mb-4">
+          <h2 className="font-semibold text-sm text-oag-text truncate">{expediente.nombre_distribuidor}</h2>
+          <p className="text-xs text-oag-muted mt-0.5">CUIT: {expediente.cuit_distribuidor}</p>
+          <p className="text-xs text-oag-muted">Período: {expediente.anio_analisis}</p>
+          <span className={cn('inline-block mt-2 text-xs px-2 py-0.5 rounded font-medium', ESTADO_COLORS[expediente.estado])}>
+            {expediente.estado === 'BORRADOR' ? 'Borrador' : expediente.estado === 'EN_PROCESO' ? 'En Proceso' : 'Completado'}
+          </span>
+        </div>
+
+        <div className="card overflow-hidden">
+          {[1, 2, 3, 4, 5, 6].map((p) => {
+            const done = expediente.pasos_completados?.includes(p)
+            const active = pasoActivo === p
+            const available = p === 1 || expediente.pasos_completados?.includes(p - 1) || done
+
+            return (
+              <button
+                key={p}
+                disabled={!available}
+                onClick={() => setPasoActivo(p)}
+                className={cn(
+                  'w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors border-b border-oag-border last:border-0',
+                  active ? 'bg-oag-blue text-white' : available ? 'hover:bg-oag-light' : 'opacity-40 cursor-not-allowed',
+                  !active && available && 'text-oag-text'
+                )}
+              >
+                <div className="flex-shrink-0">
+                  {done ? (
+                    <CheckCircle size={14} className={active ? 'text-white' : 'text-oag-success'} />
+                  ) : (
+                    <Circle size={14} className={active ? 'text-white/60' : 'text-oag-border'} />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs font-medium">Paso {p}</div>
+                  <div className={cn('text-xs truncate', active ? 'text-white/80' : 'text-oag-muted')}>
+                    {PASO_LABELS[p]}
+                  </div>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Contenido del paso */}
+      <div className="flex-1 min-w-0">
+        {PasoComponent && <PasoComponent expediente={{ ...expediente, refetch }} />}
+      </div>
+    </div>
+  )
+}
