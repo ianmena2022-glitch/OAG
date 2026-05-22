@@ -34,10 +34,7 @@ app.include_router(admin.router, prefix="/api")
 app.include_router(pasos.router, prefix="/api")
 
 
-GITHUB_RELEASE_URL = (
-    "https://github.com/ianmena2022-glitch/OAG/releases/latest/download/"
-    "OAG.Auditoras.Setup.1.0.0.exe"
-)
+GITHUB_RELEASE_URL = "https://github.com/ianmena2022-glitch/OAG/releases/latest"
 
 LANDING_HTML = """<!DOCTYPE html>
 <html lang="es">
