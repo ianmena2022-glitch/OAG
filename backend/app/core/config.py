@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 hours
 
     # Anthropic
-    ANTHROPIC_API_KEY: str
+    ANTHROPIC_API_KEY: str = ""
     CLAUDE_MODEL: str = "claude-opus-4-5"
 
     # Files

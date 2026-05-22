@@ -47,7 +47,10 @@ from .models.user import User, UserRole
 def create_initial_admin():
     db = SessionLocal()
     try:
-        if not db.query(User).filter(User.role == UserRole.ADMIN).first():
+        existing = db.query(User).filter(User.role == UserRole.ADMIN).first()
+        if existing:
+            print(f"✓ Admin ya existe: {existing.email}")
+        else:
             admin = User(
                 email="admin@oag.com",
                 nombre="Administrador OAG",
@@ -59,7 +62,9 @@ def create_initial_admin():
             db.commit()
             print("✓ Usuario admin creado: admin@oag.com / oag2024")
     except Exception as e:
-        print(f"Error creando admin: {e}")
+        print(f"✗ Error creando admin: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         db.close()
 
