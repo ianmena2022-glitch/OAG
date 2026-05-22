@@ -170,21 +170,29 @@ def cargar_glosario(
             raise HTTPException(status_code=400, detail="Se requieren columnas nombre_original y nombre_estandar")
 
     db.query(Glosario).update({"is_active": False})
+    db.flush()
 
-    count = 0
+    registros = []
     for _, row in df.iterrows():
         orig = str(row.get(col_orig, "")).strip()
         est = str(row.get(col_est, "")).strip()
-        if not orig or not est:
+        if not orig or not est or orig.lower() == "nan" or est.lower() == "nan":
             continue
-        db.add(Glosario(nombre_original=orig, nombre_estandar=est, is_active=True))
-        count += 1
+        registros.append({"nombre_original": orig, "nombre_estandar": est, "is_active": True})
+
+    if registros:
+        db.bulk_insert_mappings(Glosario, registros)
 
     db.commit()
-    return {"message": f"Glosario actualizado: {count} entradas cargadas"}
+    count = len(registros)
+    return {"message": f"Glosario actualizado: {count} entradas cargadas", "count": count}
 
 
 @router.get("/glosario")
 def obtener_glosario(db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
-    items = db.query(Glosario).filter(Glosario.is_active == True).all()
-    return [{"nombre_original": i.nombre_original, "nombre_estandar": i.nombre_estandar} for i in items]
+    total = db.query(Glosario).filter(Glosario.is_active == True).count()
+    items = db.query(Glosario).filter(Glosario.is_active == True).limit(200).all()
+    return {
+        "total": total,
+        "items": [{"nombre_original": i.nombre_original, "nombre_estandar": i.nombre_estandar} for i in items],
+    }

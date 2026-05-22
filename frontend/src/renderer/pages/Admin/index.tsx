@@ -244,27 +244,32 @@ function TabMaestro() {
 }
 
 function TabGlosario() {
-  const qc = useQueryClient()
   const { push } = useNotificationStore()
   const [uploading, setUploading] = useState(false)
+  const [uploadedCount, setUploadedCount] = useState<number | null>(null)
 
   const { data: glosario, isLoading } = useQuery({
-    queryKey: ['glosario'],
+    queryKey: ['glosario-summary'],
     queryFn: () => adminAPI.obtenerGlosario().then((r) => r.data),
   })
+
+  const total = glosario?.total ?? 0
+  const items = glosario?.items ?? []
 
   const handleUpload = async (file: File) => {
     setUploading(true)
     try {
-      await adminAPI.cargarGlosario(file)
-      qc.invalidateQueries({ queryKey: ['glosario'] })
-      push('success', 'Glosario actualizado')
+      const res = await adminAPI.cargarGlosario(file)
+      setUploadedCount(res.data.count)
+      push('success', res.data.message)
     } catch (err: any) {
       push('error', err.response?.data?.detail || 'Error al cargar glosario')
     } finally {
       setUploading(false)
     }
   }
+
+  const displayTotal = uploadedCount ?? total
 
   return (
     <div className="space-y-5">
@@ -279,17 +284,19 @@ function TabGlosario() {
             label="Archivo Glosario (.xlsx)"
             onUpload={handleUpload}
             isLoading={uploading}
-            isUploaded={glosario?.length > 0}
-            uploadedName={glosario?.length > 0 ? `${glosario.length} entradas` : undefined}
+            isUploaded={displayTotal > 0}
+            uploadedName={displayTotal > 0 ? `${displayTotal} entradas cargadas` : undefined}
           />
         </div>
       </div>
 
       {isLoading ? (
         <Loader size={20} className="animate-spin text-oag-muted" />
-      ) : glosario?.length > 0 && (
+      ) : items.length > 0 && (
         <div className="card p-5">
-          <h3 className="section-title">Entradas del glosario ({glosario.length})</h3>
+          <h3 className="section-title">
+            Muestra del glosario ({items.length} de {total} entradas)
+          </h3>
           <div className="overflow-auto max-h-80">
             <table className="w-full text-xs border-collapse">
               <thead><tr>
@@ -297,7 +304,7 @@ function TabGlosario() {
                 <th className="table-header text-left">Nombre Estandarizado</th>
               </tr></thead>
               <tbody>
-                {glosario.map((g: any, i: number) => (
+                {items.map((g: any, i: number) => (
                   <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-oag-zebra'}>
                     <td className="table-cell">{g.nombre_original}</td>
                     <td className="table-cell font-medium text-oag-blue">{g.nombre_estandar}</td>
