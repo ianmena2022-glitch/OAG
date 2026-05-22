@@ -1,16 +1,10 @@
 import axios from 'axios'
 
-// URL del backend — configurable por variable de entorno
-const getBaseUrl = (): string => {
-  if (typeof window !== 'undefined' && (window as any).electron) {
-    // En Electron usamos la URL del proceso main
-    return localStorage.getItem('oag_backend_url') || 'https://oag-backend.up.railway.app'
-  }
-  return import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
-}
+// URL del backend
+const BACKEND_URL = localStorage.getItem('oag_backend_url') || 'https://oag.up.railway.app'
 
 export const api = axios.create({
-  baseURL: getBaseUrl(),
+  baseURL: BACKEND_URL,
   timeout: 120000, // 2 min para operaciones con IA
 })
 
@@ -30,7 +24,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('oag_token')
       localStorage.removeItem('oag_user')
-      window.location.href = '/login'
+      window.location.hash = '#/login'
     }
     return Promise.reject(error)
   }

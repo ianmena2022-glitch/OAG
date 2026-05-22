@@ -1,5 +1,5 @@
 import React from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './store'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -7,6 +7,7 @@ import ExpedientePage from './pages/Expediente'
 import AdminPage from './pages/Admin'
 import Layout from './components/Layout/Layout'
 import Notifications from './components/Notifications'
+import UpdateBanner from './components/UpdateBanner'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuthStore()
@@ -22,8 +23,9 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <Notifications />
+      <UpdateBanner />
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route
@@ -47,6 +49,6 @@ export default function App() {
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   )
 }

@@ -14,6 +14,7 @@
     "preview": "electron-vite preview"
   },
   "dependencies": {
+    "electron-updater": "^6.3.9",
     "@tanstack/react-query": "^5.60.0",
     "@tanstack/react-table": "^8.20.5",
     "axios": "^1.7.7",
@@ -28,6 +29,9 @@
     "zustand": "^5.0.1"
   },
   "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.2",
+    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@electron-toolkit/utils": "^4.0.0",
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -47,15 +51,17 @@
     "directories": {
       "output": "release"
     },
+    "publish": {
+      "provider": "github",
+      "owner": "ianmena2022-glitch",
+      "repo": "OAG"
+    },
     "win": {
-      "target": "nsis",
-      "icon": "resources/icon.ico"
+      "target": "nsis"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "installerIcon": "resources/icon.ico",
-      "installerHeaderIcon": "resources/icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "OAG Auditorías"
