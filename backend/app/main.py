@@ -36,7 +36,7 @@ app.include_router(pasos.router, prefix="/api")
 
 GITHUB_RELEASE_URL = (
     "https://github.com/ianmena2022-glitch/OAG/releases/latest/download/"
-    "OGSA.Auditorias.Setup.1.0.0.exe"
+    "ogsa-auditoria-setup-1.0.0.exe"
 )
 
 LANDING_HTML = """<!DOCTYPE html>
