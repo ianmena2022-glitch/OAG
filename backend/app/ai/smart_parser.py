@@ -136,16 +136,21 @@ def detectar_por_keywords(
     schema: {std_col: [keyword1, keyword2, ...]} en orden de preferencia.
     excluir_si_contiene: {std_col: [palabras_que_descartan_columna]}.
     Retorna {std_col: col_original|None}.
+
+    Garantía: una columna física nunca se asigna a dos campos estándar distintos.
+    Si ya fue asignada, queda excluida de las candidatas siguientes.
     """
     cols_norm = {_norm(c): c for c in cols}
     mapping = {}
+    used_cols: set = set()   # columnas originales ya asignadas a algún campo
 
     for std_col, keywords in schema.items():
         exclude_terms = (excluir_si_contiene or {}).get(std_col, [])
-        # Aplicar exclusiones a las candidatas
+        # Candidatas: sin exclusiones explícitas Y sin columnas ya asignadas
         candidatas = {
             cn: co for cn, co in cols_norm.items()
             if not any(_norm(ex) in cn for ex in exclude_terms)
+            and co not in used_cols
         }
         encontrada = None
         for kw in keywords:
@@ -165,6 +170,8 @@ def detectar_por_keywords(
             if encontrada:
                 break
         mapping[std_col] = encontrada
+        if encontrada:
+            used_cols.add(encontrada)   # marcar columna como usada
 
     return mapping
 

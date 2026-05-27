@@ -128,9 +128,13 @@ TC_SCHEMA = {
 ARCA_SCHEMA = {
     "tipo_comprobante": ["tipo de comprobante", "tipo comprobante", "tipo"],
     "punto_venta": ["punto de venta", "pto. vta", "pto vta", "pto venta", "pv"],
-    "numero_comprobante": ["número desde", "numero desde", "nro desde",
-                            "nro comprobante", "nro. comprobante", "número comprobante",
-                            "comprobante", "factura", "número", "numero", "nro"],
+    "numero_comprobante": [
+        # Específicos de ARCA — van primero para ganar ante keywords genéricos
+        "número desde", "numero desde", "nro desde",
+        "desde",           # captura "NÃºmero Desde" con encoding roto (→ "namero desde")
+        "nro comprobante", "nro. comprobante", "número comprobante",
+        "comprobante", "factura", "número", "numero", "nro",
+    ],
     "fecha": ["fecha de emisión", "fecha emisión", "fecha emision",
               "fecha comprobante", "fecha"],
     "moneda": ["moneda", "mon"],
@@ -140,7 +144,11 @@ ARCA_SCHEMA = {
 
 ARCA_EXCLUSIONES = {
     # No queremos que estos campos se confundan con datos del receptor
-    "numero_comprobante": ["cuit", "receptor", "comprador", "doc receptor", "denominacion", "denominación"],
+    "numero_comprobante": [
+        "cuit", "receptor", "comprador", "doc receptor", "denominacion", "denominación",
+        "tipo",   # evitar que "Tipo de Comprobante" se mapee como número
+        "hasta",  # evitar "Número Hasta" — solo queremos "Número Desde"
+    ],
     "tipo_comprobante": ["cuit", "receptor", "doc receptor", "doc. receptor"],
     "punto_venta": ["cuit", "receptor"],
     "fecha": ["vencimiento", "vto"],
