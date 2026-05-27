@@ -753,6 +753,13 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
     elif col_total:
         print(f"[GESTION] Monto neto no encontrado — usando TOTAL: '{col_total}' (puede incluir IVA)")
 
+    # El TC del ERP se usa SOLO para reconstruir ARS cuando el archivo exporta
+    # únicamente en USD (Caso B). Para la conversión ARS→USD siempre se usa
+    # el TC del usuario (tc_map). Nunca se usa el TC del ERP para convertir ARS.
+    if col_tc:
+        print(f"[GESTION] Columna TC del ERP detectada ('{col_tc}') — "
+              f"ignorada para conversión, se usa el TC del archivo del usuario")
+
     # Pre-calcular moneda inferida si no hay columna de moneda ni de total USD
     moneda_global = None
     if not col_moneda and not col_total_usd and col_monto_base:
@@ -790,20 +797,51 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
             else:
                 numero = normalizar_numero_comprobante(valor_combinado=numero_raw)
 
-            # Monto: prioridad neto > total > columna USD explícita
-            if col_total_usd and not col_monto_base:
-                # Columna explícita en USD y sin neto/total → usar directamente
-                monto_usd = normalizar_monto(row.get(col_total_usd))
-                monto_original = monto_usd
-                moneda = "USD"
-            elif col_monto_base:
+            # ── Conversión de montos ─────────────────────────────────────────
+            #
+            # REGLA: el TC del usuario (tc_map) es siempre la fuente de verdad.
+            # El TC del ERP NUNCA se usa para convertir ARS→USD.
+            #
+            # Caso A (normal): el archivo tiene columna ARS (neto o total)
+            #   → leer ARS y dividir por TC del usuario
+            #   → ignorar completamente el TC del ERP y la columna USD del ERP
+            #
+            # Caso B (especial): el archivo solo exporta en USD y tiene su propio TC
+            #   → reconstruir ARS = USD_erp × TC_erp
+            #   → convertir ARS → USD con el TC del usuario
+            #   → resultado diferente al USD del ERP si sus TCs difieren
+            #
+            # Caso C: el archivo exporta en USD real (moneda USD, sin TC o TC=0)
+            #   → usar USD directamente (no hay ARS para reconstruir)
+
+            if col_monto_base:
+                # Caso A — fuente ARS disponible: usa SIEMPRE TC del usuario
                 monto_original = normalizar_monto(row.get(col_monto_base))
                 if col_moneda:
                     moneda = str(row.get(col_moneda, "ARS")).upper().strip() or "ARS"
                 else:
                     moneda = moneda_global or "ARS"
-                tc = normalizar_monto(row.get(col_tc)) if col_tc else 0
-                monto_usd = _convertir_a_usd(monto_original, moneda, tc, fecha, tc_map)
+                # tc_row=0 fuerza a _convertir_a_usd a usar el mapa del usuario
+                monto_usd = _convertir_a_usd(monto_original, moneda, 0, fecha, tc_map)
+
+            elif col_total_usd:
+                monto_usd_erp = normalizar_monto(row.get(col_total_usd))
+                tc_erp = normalizar_monto(row.get(col_tc)) if col_tc else 0
+                if tc_erp > 1:
+                    # Caso B — reconstruir ARS con TC del ERP, convertir con TC usuario
+                    monto_original = round(monto_usd_erp * tc_erp, 2)
+                    tc_usuario = obtener_tipo_cambio_fecha(
+                        tc_map,
+                        fecha.date() if hasattr(fecha, "date") else fecha,
+                        "ARS",
+                    )
+                    monto_usd = round(monto_original / tc_usuario, 2) if tc_usuario > 1 else monto_usd_erp
+                    moneda = "ARS"
+                else:
+                    # Caso C — USD real sin TC del ERP: usar directo
+                    monto_original = monto_usd_erp
+                    monto_usd = monto_usd_erp
+                    moneda = "USD"
             else:
                 monto_original = 0.0
                 monto_usd = 0.0
