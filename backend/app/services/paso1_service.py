@@ -455,6 +455,61 @@ def _es_fila_basura_gestion(
     return False
 
 
+def _deduplicar_gestion(registros: list) -> list:
+    """
+    Elimina duplicados inter-archivo cuando el mismo comprobante aparece en
+    múltiples archivos ERP.
+
+    Caso típico: el "Reporte Facturas" exporta FC + NC + ND todos juntos,
+    y el usuario TAMBIÉN subió archivos separados de NC y ND.
+    Resultado: cada NC aparece dos veces con keys distintas:
+      - NC-00000-XXXXXXXX  (del archivo Facturas, sin columna PV)
+      - NC-00001-XXXXXXXX  (del archivo NC, con PV real)
+
+    Regla universal:
+    - Si hay dos registros con igual (tipo, num_part) donde UNO tiene PV=00000
+      y OTRO tiene PV real → son el mismo comprobante → conservar el de PV real.
+    - Si ambos tienen PV real pero distinto → son comprobantes genuinamente
+      diferentes (mismo número en distintos puntos de venta) → mantener ambos.
+    - Si ambos tienen PV=00000 → duplicado puro (mismo archivo cargado dos veces
+      u otro motivo) → conservar solo uno.
+    """
+    from collections import defaultdict
+
+    # Agrupar por (tipo, num_part)
+    por_tipo_num: dict = defaultdict(list)
+    for r in registros:
+        pv_part, num_part = r["numero"].split("-", 1)
+        por_tipo_num[(r["tipo"], num_part)].append((pv_part, r))
+
+    resultado = []
+    eliminados = 0
+    for (_tipo, _num), entries in por_tipo_num.items():
+        if len(entries) == 1:
+            resultado.append(entries[0][1])
+            continue
+
+        con_pv_real = [(pv, r) for pv, r in entries if pv != "00000"]
+        sin_pv      = [(pv, r) for pv, r in entries if pv == "00000"]
+
+        if con_pv_real and sin_pv:
+            # Mismo comprobante desde archivo con y sin PV → conservar PV real
+            resultado.extend(r for _, r in con_pv_real)
+            eliminados += len(sin_pv)
+        elif not con_pv_real:
+            # Todos PV=00000 → duplicado puro → conservar uno
+            resultado.append(sin_pv[0][1])
+            eliminados += len(sin_pv) - 1
+        else:
+            # Todos con PV real pero distintos → comprobantes genuinamente distintos
+            resultado.extend(r for _, r in entries)
+
+    if eliminados:
+        print(f"[GESTION] Deduplicación inter-archivo: {eliminados} duplicado(s) eliminado(s) "
+              f"(mismo comprobante en múltiples archivos ERP)")
+    return resultado
+
+
 def _agregar_por_comprobante(registros: list) -> list:
     """
     Agrupa registros de Gestión por clave (tipo+numero) y suma los montos.
@@ -544,6 +599,9 @@ def ejecutar_paso1(
             "registros_procesados": len(registros),
             "filas_en_archivo": len(df_gestion),
         })
+
+    # Deduplicar registros inter-archivo (mismo comprobante en Facturas + NC/ND separados)
+    all_registros_gestion = _deduplicar_gestion(all_registros_gestion)
 
     # Agregar líneas de producto → un registro por comprobante
     filas_gestion_raw = len(all_registros_gestion)
