@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     CLAUDE_MODEL: str = "claude-opus-4-5"
 
-    # Files
-    UPLOAD_DIR: str = "/tmp/ogsa_uploads"
+    # Files — usar /data en producción (Railway Volume) o /tmp en local
+    UPLOAD_DIR: str = "/data/ogsa_uploads"
     MAX_FILE_SIZE_MB: int = 50
 
     # CORS
