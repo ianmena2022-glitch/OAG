@@ -828,24 +828,36 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
                 "estado": estado,
             })
 
-    # ── Paso 2: Fuzzy PV — Gestión con PV=00000 sin match exacto ────────────
-    for r_gest in gestion:
-        if id(r_gest) in gestion_usados:
-            continue
+    # ── Paso 2: Fuzzy PV — Gestión sin PV válido o con PV ajeno a ARCA ─────
+    #
+    # Dos causas frecuentes de PV incorrecto en Gestión:
+    #   a) ERP no exporta PV → normalizar_numero_comprobante() pone "00000"
+    #   b) ERP usa el código de tipo AFIP como prefijo del número
+    #      (ej: "0003-00000204" donde 0003 = NC-A, no el PV real)
+    #      → Gestión queda con PV=00003 pero ARCA tiene PV=00001
+    #
+    # Estrategia: si el PV del Gestión NO aparece entre los PVs reales de ARCA,
+    # intentar match por (tipo, NUM) ignorando el PV.
+    # Si el PV SÍ existe en ARCA pero no hubo match exacto → SOLO_GESTION genuino.
+
+    arca_pvs = {r["numero"].split("-", 1)[0] for r in arca}
+
+    def _aplicar_fuzzy(r_gest: dict) -> bool:
+        """Intenta match fuzzy para r_gest. Retorna True si matcheó."""
         pv_part, num_part = r_gest["numero"].split("-", 1)
-        if pv_part != "00000":
-            continue  # tiene PV real → dejarlo para Paso 3 (SOLO_GESTION real)
+        # Solo aplicar si el PV es desconocido (00000) o extraño (no existe en ARCA)
+        if pv_part != "00000" and pv_part in arca_pvs:
+            return False
         candidatos = arca_por_tipo_num.get((r_gest["tipo"], num_part), [])
         for r_arca in candidatos:
             if id(r_arca) in arca_usados:
                 continue
-            # ¡Match por (tipo, num) ignorando PV faltante en Gestión!
             diff = round(r_gest["monto_usd"] - r_arca["monto_usd_arca"], 2)
             estado = "OK" if abs(diff) <= 1.0 else "DIFERENCIA"
             arca_usados.add(id(r_arca))
             gestion_usados.add(id(r_gest))
             conciliacion.append({
-                "key": r_arca["key"],      # key con PV correcto de ARCA
+                "key": r_arca["key"],
                 "tipo": r_arca["tipo"],
                 "numero": r_arca["numero"],
                 "fecha": r_arca["fecha"],
@@ -855,7 +867,13 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
                 "diferencia_usd": diff,
                 "estado": estado,
             })
-            break
+            return True
+        return False
+
+    for r_gest in gestion:
+        if id(r_gest) in gestion_usados:
+            continue
+        _aplicar_fuzzy(r_gest)
 
     # ── Paso 3: Sobrantes ────────────────────────────────────────────────────
     for r_arca in arca:
