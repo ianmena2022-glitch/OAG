@@ -878,7 +878,7 @@ def _procesar_arca(df: pd.DataFrame, tc_map: dict, mapping: dict = None) -> list
                 "numero": numero,
                 "fecha": fecha.strftime("%Y-%m-%d"),
                 "moneda": moneda,
-                "monto_original": monto_total,
+                "monto_original": monto_base,
                 "monto_usd_arca": round(monto_usd, 2),
                 "key": f"{tipo}-{numero}",
             })
