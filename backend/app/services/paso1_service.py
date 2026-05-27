@@ -44,17 +44,49 @@ def normalizar_tipo_comprobante(tipo: str) -> str:
     return "FC"
 
 
-def construir_numero_comprobante(row: pd.Series, col_pv: str = None, col_num: str = None) -> str:
-    """Construye clave única: tipo-PUNTOVENTA-NUMERO"""
-    pv = str(row.get(col_pv, "0")).strip().zfill(5) if col_pv else "00000"
-    num = str(row.get(col_num, "0")).strip().zfill(8) if col_num else "00000000"
-    return f"{pv}-{num}"
+def normalizar_numero_comprobante(valor_combinado=None, pv=None, num=None) -> str:
+    """
+    Normaliza al formato PPPPP-NNNNNNNN (5 dígitos PV, 8 dígitos número).
+    Acepta:
+      - pv y num por separado
+      - string "0002-00001063"
+      - string "200001063" (los últimos 8 dígitos son NUM, el resto PV)
+      - string "1063"
+    Esto unifica el formato entre Gestión y ARCA para que matcheen.
+    """
+    def _digits(s):
+        return ''.join(c for c in str(s or '') if c.isdigit())
+
+    if pv is not None or num is not None:
+        pv_d = _digits(pv) or "0"
+        num_d = _digits(num) or "0"
+        return f"{pv_d.zfill(5)}-{num_d.zfill(8)}"
+
+    s = str(valor_combinado or '').strip()
+    if '-' in s:
+        parts = s.split('-')
+        if len(parts) == 2:
+            pv_d = _digits(parts[0]) or "0"
+            num_d = _digits(parts[1]) or "0"
+            return f"{pv_d.zfill(5)}-{num_d.zfill(8)}"
+
+    digits = _digits(s)
+    if len(digits) > 8:
+        num_d = digits[-8:]
+        pv_d = digits[:-8]
+        return f"{pv_d.zfill(5)}-{num_d.zfill(8)}"
+    return f"00000-{digits.zfill(8)}"
 
 
 def obtener_tipo_cambio_fecha(tc_map: dict, fecha: date, moneda: str) -> float:
-    """Retorna el tipo de cambio para una fecha dada. Si no existe exacto, usa el más cercano anterior."""
+    """Retorna el tipo de cambio para una fecha dada. Si no existe exacto, usa el más cercano anterior.
+    Retorna 0 si no se puede determinar (importante: NUNCA retornar 1.0 para ARS porque infla los totales).
+    """
     if str(moneda).upper() in ("USD", "U$S", "DOLAR", "DÓLAR", "DOL"):
         return 1.0
+
+    if not tc_map:
+        return 0  # Sin datos → no inventar
 
     fecha_str = fecha.strftime("%Y-%m-%d") if hasattr(fecha, "strftime") else str(fecha)
 
@@ -73,11 +105,11 @@ def obtener_tipo_cambio_fecha(tc_map: dict, fecha: date, moneda: str) -> float:
     if anterior:
         return tc_map[anterior]
 
-    # Usar primera disponible como fallback
+    # Usar primera disponible como fallback (la más antigua)
     if fechas_disponibles:
         return tc_map[fechas_disponibles[0]]
 
-    return 1.0
+    return 0  # NUNCA 1.0 — eso inflaba los totales x10
 
 
 def leer_tipos_cambio(path: str) -> dict:
@@ -234,17 +266,19 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict) -> list:
             if pd.isna(fecha):
                 continue
 
-            numero = str(row.get("numero_comprobante", "")).strip()
-            moneda = str(row.get("moneda", "ARS")).upper()
-            tc = normalizar_monto(row.get("tipo_cambio")) or 1.0
+            numero_raw = row.get("numero_comprobante", "")
+            pv_raw = row.get("punto_venta", None)
+            # Si el numero ya viene como "PV-NUM" o como dígitos concatenados, el normalizador lo separa
+            if pv_raw is not None and not pd.isna(pv_raw) and str(pv_raw).strip():
+                numero = normalizar_numero_comprobante(pv=pv_raw, num=numero_raw)
+            else:
+                numero = normalizar_numero_comprobante(valor_combinado=numero_raw)
+
+            moneda = str(row.get("moneda", "ARS")).upper().strip()
+            tc = normalizar_monto(row.get("tipo_cambio"))
             monto_total = normalizar_monto(row.get("monto_total"))
 
-            # Determinar TC correcto
-            if moneda in ("USD", "U$S", "DOLAR", "DÓLAR"):
-                monto_usd = monto_total
-            else:
-                tc_real = tc if tc > 1 else obtener_tipo_cambio_fecha(tc_map, fecha.date(), moneda)
-                monto_usd = monto_total / tc_real if tc_real else monto_total
+            monto_usd = _convertir_a_usd(monto_total, moneda, tc, fecha, tc_map)
 
             # Signo por tipo de comprobante
             if tipo == "NC":
@@ -272,16 +306,31 @@ def _procesar_arca(df: pd.DataFrame, tc_map: dict) -> list:
     """Procesa comprobantes emitidos de ARCA."""
     registros = []
 
-    # Detectar columnas ARCA
+    # Detectar columnas ARCA — excluyendo las del receptor (CUIT/comprador)
     cols = {c.lower(): c for c in df.columns}
+    cols_no_receptor = {
+        k: v for k, v in cols.items()
+        if not any(x in k for x in ["cuit", "receptor", "comprador", "doc receptor", "denomin"])
+    }
 
-    col_tipo = _find_col(cols, ["tipo", "tipo comprobante"])
-    col_pv = _find_col(cols, ["punto de venta", "pto vta", "pv"])
-    col_num = _find_col(cols, ["número", "numero", "nro", "número desde"])
-    col_fecha = _find_col(cols, ["fecha", "fecha comprobante"])
+    col_tipo = _find_col(cols_no_receptor, ["tipo de comprobante", "tipo comprobante", "tipo"])
+    col_pv = _find_col(cols_no_receptor, ["punto de venta", "pto. vta", "pto vta", "pto venta"])
+    # Para el número: priorizar "desde" sobre nombres genéricos para evitar columnas del receptor
+    col_num = _find_col(cols_no_receptor, [
+        "número desde", "numero desde",
+        "nro comprobante", "nro. comprobante",
+        "número comprobante", "numero comprobante",
+        "número factura", "numero factura",
+        "comprobante", "factura",
+        "número", "numero", "nro"
+    ])
+    col_fecha = _find_col(cols, ["fecha de emisión", "fecha comprobante", "fecha"])
     col_moneda = _find_col(cols, ["moneda", "mon"])
-    col_tc = _find_col(cols, ["tipo de cambio", "tc", "t/c"])
-    col_total = _find_col(cols, ["importe total", "total", "imp. total"])
+    col_tc = _find_col(cols, ["tipo de cambio", "t/c", " tc"])
+    col_total = _find_col(cols, ["importe total", "imp. total", "imp total", "total"])
+
+    print(f"[ARCA] Columnas detectadas: tipo={col_tipo}, pv={col_pv}, num={col_num}, "
+          f"fecha={col_fecha}, moneda={col_moneda}, tc={col_tc}, total={col_total}")
 
     for _, row in df.iterrows():
         try:
@@ -291,19 +340,15 @@ def _procesar_arca(df: pd.DataFrame, tc_map: dict) -> list:
             if pd.isna(fecha):
                 continue
 
-            pv = str(row.get(col_pv, "0")).strip().zfill(5) if col_pv else "00000"
-            num = str(row.get(col_num, "0")).strip().zfill(8) if col_num else "00000000"
-            numero = f"{pv}-{num}"
+            pv_raw = row.get(col_pv) if col_pv else None
+            num_raw = row.get(col_num) if col_num else None
+            numero = normalizar_numero_comprobante(pv=pv_raw, num=num_raw)
 
-            moneda = str(row.get(col_moneda, "ARS")).upper() if col_moneda else "ARS"
-            tc = normalizar_monto(row.get(col_tc)) if col_tc else 1.0
+            moneda = str(row.get(col_moneda, "ARS")).upper().strip() if col_moneda else "ARS"
+            tc = normalizar_monto(row.get(col_tc)) if col_tc else 0
             monto_total = normalizar_monto(row.get(col_total, 0))
 
-            if moneda in ("USD", "U$S", "DOLAR", "DÓLAR"):
-                monto_usd = monto_total
-            else:
-                tc_real = tc if tc > 1 else obtener_tipo_cambio_fecha(tc_map, fecha.date(), moneda)
-                monto_usd = monto_total / tc_real if tc_real else monto_total
+            monto_usd = _convertir_a_usd(monto_total, moneda, tc, fecha, tc_map)
 
             # ARCA: NC siempre positivo → negativizar
             if tipo == "NC":
@@ -320,10 +365,29 @@ def _procesar_arca(df: pd.DataFrame, tc_map: dict) -> list:
                 "monto_usd_arca": round(monto_usd, 2),
                 "key": f"{tipo}-{numero}",
             })
-        except Exception:
+        except Exception as e:
             continue
 
     return registros
+
+
+def _convertir_a_usd(monto_ars: float, moneda: str, tc_row: float, fecha, tc_map: dict) -> float:
+    """Convierte un monto a USD usando la moneda, el TC del row (si existe) y el mapa de TCs."""
+    if not monto_ars:
+        return 0.0
+    moneda_norm = (moneda or "").upper().strip()
+    if moneda_norm in ("USD", "U$S", "DOLAR", "DÓLAR", "DOL", "$U", "USD$"):
+        return monto_ars
+    # Preferir TC del comprobante si es válido (>1 para evitar 0 o 1.0 falso)
+    if tc_row and tc_row > 1:
+        return monto_ars / tc_row
+    # Sino buscar en el mapa de tipos de cambio
+    tc_fecha = obtener_tipo_cambio_fecha(tc_map, fecha.date() if hasattr(fecha, 'date') else fecha, moneda_norm)
+    if tc_fecha and tc_fecha > 1:
+        return monto_ars / tc_fecha
+    # Si no hay TC válido, dejarlo en ARS (no inventar) — devolvemos 0 para no inflar totales
+    print(f"[WARN] Sin TC para {fecha} moneda={moneda} → monto={monto_ars} se ignora en total USD")
+    return 0.0
 
 
 def _find_col(cols_lower: dict, keywords: list):
@@ -335,26 +399,35 @@ def _find_col(cols_lower: dict, keywords: list):
 
 
 def _cruzar_comprobantes(gestion: list, arca: list) -> list:
-    """Cruza registros y retorna conciliación."""
-    arca_map = {r["key"]: r for r in arca}
-    gestion_map = {r["key"]: r for r in gestion}
+    """Cruza registros y retorna conciliación.
+
+    Si una key aparece N veces en cada lado, se generan N pares (no se pisan).
+    Si aparece más veces en un lado, los sobrantes quedan como SOLO_*.
+    """
+    from collections import defaultdict
+
+    arca_groups = defaultdict(list)
+    gestion_groups = defaultdict(list)
+    for r in arca:
+        arca_groups[r["key"]].append(r)
+    for r in gestion:
+        gestion_groups[r["key"]].append(r)
 
     conciliacion = []
-    procesados = set()
+    all_keys = set(arca_groups.keys()) | set(gestion_groups.keys())
 
-    # Registros en ARCA
-    for key, r_arca in arca_map.items():
-        procesados.add(key)
-        if key in gestion_map:
-            r_gest = gestion_map[key]
+    for key in all_keys:
+        a_list = arca_groups.get(key, [])
+        g_list = gestion_groups.get(key, [])
+
+        # Emparejar uno-a-uno mientras haya en ambos
+        n = min(len(a_list), len(g_list))
+        for i in range(n):
+            r_arca = a_list[i]
+            r_gest = g_list[i]
             diff = round(r_gest["monto_usd"] - r_arca["monto_usd_arca"], 2)
-            tolerancia = 1.0  # USD 1 de tolerancia por redondeo
-
-            if abs(diff) <= tolerancia:
-                estado = "OK"
-            else:
-                estado = "DIFERENCIA"
-
+            tolerancia = 1.0
+            estado = "OK" if abs(diff) <= tolerancia else "DIFERENCIA"
             conciliacion.append({
                 "key": key,
                 "tipo": r_arca["tipo"],
@@ -366,7 +439,9 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
                 "diferencia_usd": diff,
                 "estado": estado,
             })
-        else:
+
+        # Sobrantes en ARCA → SOLO_ARCA
+        for r_arca in a_list[n:]:
             conciliacion.append({
                 "key": key,
                 "tipo": r_arca["tipo"],
@@ -379,9 +454,8 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
                 "estado": "SOLO_ARCA",
             })
 
-    # Registros solo en gestión
-    for key, r_gest in gestion_map.items():
-        if key not in procesados:
+        # Sobrantes en Gestión → SOLO_GESTION
+        for r_gest in g_list[n:]:
             conciliacion.append({
                 "key": key,
                 "tipo": r_gest["tipo"],
@@ -394,7 +468,6 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
                 "estado": "SOLO_GESTION",
             })
 
-    # Ordenar por fecha
     conciliacion.sort(key=lambda x: x["fecha"])
     return conciliacion
 
