@@ -320,77 +320,45 @@ def normalizar_monto(valor) -> float:
 
 
 def ejecutar_paso1(
-    path_bajada: str,
+    paths_bajada: list,   # lista de (path, nombre_original) tuples
     path_emitidos: str,
     path_tc: str,
     expediente_id: int,
 ) -> dict:
     """
     Ejecuta el cruce completo del Paso 1.
-    Retorna dict con:
-      - conciliacion: lista de dicts con resultado por comprobante
-      - resumen: totales y conteos
-      - bajada_normalizada_path: path del Excel normalizado
-      - mapping_columnas: dict de mapping detectado
+    paths_bajada puede contener múltiples archivos ERP — cada uno se parsea
+    individualmente con su propio schema/tipo_inferido y los registros se consolidan.
     """
     # 1. Cargar tipos de cambio
     tc_map = leer_tipos_cambio(path_tc)
 
-    # 2. Cargar bajada de gestión con smart_parser (IA + thinking)
-    df_gestion, gestion_mapping, gestion_info = leer_bajada_gestion(path_bajada)
-
-    # 3. Cargar comprobantes ARCA (smart_parser)
-    df_arca_raw, arca_mapping, arca_info = leer_comprobantes_emitidos_arca(path_emitidos)
-
-    # 4. Procesar bajada de gestión usando el mapping detectado
-    # Si el título del reporte indica el tipo (ej: "LISTADO DE NOTAS DE CREDITO"), usarlo
-    metadata_gestion = gestion_info.get("metadata_reporte", {})
-    tipo_inferido = metadata_gestion.get("tipo_inferido")
-    registros_gestion = _procesar_gestion(
-        df_gestion, tc_map, mapping=gestion_mapping, tipo_inferido=tipo_inferido
-    )
-
-    # 5. Procesar comprobantes ARCA
-    registros_arca = _procesar_arca(df_arca_raw, tc_map, mapping=arca_mapping)
-
-    # 6. Cruce / Conciliación
-    conciliacion = _cruzar_comprobantes(registros_gestion, registros_arca)
-
-    # 7. Guardar bajada normalizada (para Paso 2)
-    upload_dir = os.path.join(settings.UPLOAD_DIR, str(expediente_id))
-    os.makedirs(upload_dir, exist_ok=True)
-    path_normalizada = os.path.join(upload_dir, "bajada_gestion_normalizada.xlsx")
-    _exportar_bajada_normalizada(df_gestion, tc_map, path_normalizada, mapping=gestion_mapping)
-
-    # 8. Calcular resumen
-    solo_arca = [r for r in conciliacion if r["estado"] == "SOLO_ARCA"]
-    solo_gestion = [r for r in conciliacion if r["estado"] == "SOLO_GESTION"]
-    diferencia = [r for r in conciliacion if r["estado"] == "DIFERENCIA"]
-    ok = [r for r in conciliacion if r["estado"] == "OK"]
-
-    resumen = {
-        "total_arca": len(registros_arca),
-        "total_gestion": len(registros_gestion),
-        "ok": len(ok),
-        "solo_arca": len(solo_arca),
-        "solo_gestion": len(solo_gestion),
-        "con_diferencia": len(diferencia),
-        "monto_total_arca_usd": sum(r["monto_usd_arca"] for r in registros_arca),
-        "monto_total_gestion_usd": sum(r["monto_usd"] for r in registros_gestion),
-    }
-
-    # Validación con IA
-    from ..ai.validator import validar_paso
-    validacion = validar_paso(1, resumen, muestra=conciliacion[:5])
-
-    # Diagnóstico estructurado de parseo por archivo
+    # 2. Procesar TODOS los archivos de bajada de gestión
+    all_registros_gestion = []
+    all_dfs_gestion = []       # para exportar bajada normalizada
+    all_mappings_gestion = []  # para exportar bajada normalizada
     parser_diagnostico = []
-    if gestion_info:
+
+    for path_bajada, nombre_archivo in paths_bajada:
+        df_gestion, gestion_mapping, gestion_info = leer_bajada_gestion(path_bajada)
+        metadata = gestion_info.get("metadata_reporte", {})
+        tipo_inferido = metadata.get("tipo_inferido")
+
+        registros = _procesar_gestion(
+            df_gestion, tc_map, mapping=gestion_mapping, tipo_inferido=tipo_inferido
+        )
+        all_registros_gestion.extend(registros)
+        all_dfs_gestion.append(df_gestion)
+        all_mappings_gestion.append(gestion_mapping)
+
         gestion_warnings = list(gestion_info.get("warnings", []))
         if tipo_inferido:
-            gestion_warnings.insert(0, f"Tipo inferido del título del reporte: todos los registros son {tipo_inferido}")
+            gestion_warnings.insert(
+                0, f"Tipo inferido del título del reporte: todos los registros son {tipo_inferido}"
+            )
+
         parser_diagnostico.append({
-            "archivo": "Bajada de Gestión (ERP)",
+            "archivo": nombre_archivo,
             "metodo": gestion_info["metodo"],
             "confianza": gestion_info["confianza"],
             "mapping": gestion_info["mapping"],
@@ -398,9 +366,16 @@ def ejecutar_paso1(
             "columnas_faltantes": gestion_info.get("columnas_faltantes", []),
             "columnas_no_mapeadas": gestion_info.get("columnas_no_mapeadas", []),
             "warnings": gestion_warnings,
-            "registros_procesados": len(registros_gestion),
+            "registros_procesados": len(registros),
             "filas_en_archivo": len(df_gestion),
         })
+
+    registros_gestion = all_registros_gestion
+
+    # 3. Cargar comprobantes ARCA (smart_parser)
+    df_arca_raw, arca_mapping, arca_info = leer_comprobantes_emitidos_arca(path_emitidos)
+    registros_arca = _procesar_arca(df_arca_raw, tc_map, mapping=arca_mapping)
+
     if arca_info:
         parser_diagnostico.append({
             "archivo": "Comprobantes Emitidos (ARCA)",
@@ -413,12 +388,50 @@ def ejecutar_paso1(
             "warnings": arca_info.get("warnings", []),
         })
 
+    # 4. Cruce / Conciliación
+    conciliacion = _cruzar_comprobantes(registros_gestion, registros_arca)
+
+    # 5. Guardar bajada normalizada consolidada (para Paso 2)
+    upload_dir = os.path.join(settings.UPLOAD_DIR, str(expediente_id))
+    os.makedirs(upload_dir, exist_ok=True)
+    path_normalizada = os.path.join(upload_dir, "bajada_gestion_normalizada.xlsx")
+    if all_dfs_gestion:
+        # Exportar el primero (o concatenar si hay varios)
+        if len(all_dfs_gestion) == 1:
+            _exportar_bajada_normalizada(
+                all_dfs_gestion[0], tc_map, path_normalizada, mapping=all_mappings_gestion[0]
+            )
+        else:
+            # Para múltiples archivos: concatenar y exportar
+            df_concat = pd.concat(all_dfs_gestion, ignore_index=True)
+            df_concat.to_excel(path_normalizada, index=False)
+
+    # 6. Calcular resumen
+    solo_arca = [r for r in conciliacion if r["estado"] == "SOLO_ARCA"]
+    solo_gestion = [r for r in conciliacion if r["estado"] == "SOLO_GESTION"]
+    diferencia = [r for r in conciliacion if r["estado"] == "DIFERENCIA"]
+    ok = [r for r in conciliacion if r["estado"] == "OK"]
+
+    resumen = {
+        "total_arca": len(registros_arca),
+        "total_gestion": len(registros_gestion),
+        "archivos_gestion": len(paths_bajada),
+        "ok": len(ok),
+        "solo_arca": len(solo_arca),
+        "solo_gestion": len(solo_gestion),
+        "con_diferencia": len(diferencia),
+        "monto_total_arca_usd": sum(r["monto_usd_arca"] for r in registros_arca),
+        "monto_total_gestion_usd": sum(r["monto_usd"] for r in registros_gestion),
+    }
+
+    # Validación con IA
+    from ..ai.validator import validar_paso
+    validacion = validar_paso(1, resumen, muestra=conciliacion[:5])
+
     return {
         "conciliacion": conciliacion,
         "resumen": resumen,
         "bajada_normalizada_path": path_normalizada,
-        "mapping_columnas": gestion_mapping,
-        "arca_mapping": arca_mapping,
         "parser_diagnostico": parser_diagnostico,
         "validacion": validacion,
     }

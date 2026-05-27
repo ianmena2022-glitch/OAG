@@ -1,11 +1,11 @@
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { expedientesAPI, pasosAPI } from '../../lib/api'
 import { useNotificationStore } from '../../store'
-import { formatUSD, downloadBlob } from '../../lib/utils'
+import { formatUSD } from '../../lib/utils'
 import FileUpload from '../../components/FileUpload'
 import DataTable, { Column } from '../../components/DataTable'
-import { Play, Download, Loader, CheckCircle, AlertTriangle, Info } from 'lucide-react'
+import { Play, Loader, Info, Plus, Trash2, FileText } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import PasoFeedback from '../../components/PasoFeedback'
 
@@ -18,25 +18,54 @@ const ESTADO_COLORS: Record<string, string> = {
   SOLO_GESTION: 'text-orange-700 bg-orange-50',
 }
 
+function formatSize(bytes?: number) {
+  if (!bytes) return ''
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 export default function Paso1({ expediente }: Props) {
   const qc = useQueryClient()
   const { push } = useNotificationStore()
   const [uploading, setUploading] = useState<Record<string, boolean>>({})
+  const [deletingId, setDeletingId] = useState<number | null>(null)
+  const erpInputRef = useRef<HTMLInputElement>(null)
 
   const archivos = expediente.archivos || []
   const getArchivo = (tipo: string) => archivos.find((a: any) => a.tipo === tipo)
+  // Para BAJADA_GESTION puede haber varios
+  const archivosGestion: any[] = archivos.filter((a: any) => a.tipo === 'BAJADA_GESTION')
 
   const handleUpload = async (tipo: string, file: File) => {
     setUploading((p) => ({ ...p, [tipo]: true }))
     try {
       await expedientesAPI.subirArchivo(expediente.id, tipo, file)
       qc.invalidateQueries({ queryKey: ['expediente', String(expediente.id)] })
-      push('success', `${tipo.replace('_', ' ')} cargado correctamente`)
+      push('success', `Archivo ERP "${file.name}" cargado`)
     } catch {
       push('error', 'Error al subir archivo')
     } finally {
       setUploading((p) => ({ ...p, [tipo]: false }))
     }
+  }
+
+  const handleDeleteArchivo = async (archivoId: number, nombre: string) => {
+    setDeletingId(archivoId)
+    try {
+      await expedientesAPI.eliminarArchivo(expediente.id, archivoId)
+      qc.invalidateQueries({ queryKey: ['expediente', String(expediente.id)] })
+      push('success', `"${nombre}" eliminado`)
+    } catch {
+      push('error', 'Error al eliminar archivo')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  const handleErpFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    files.forEach((file) => handleUpload('BAJADA_GESTION', file))
+    e.target.value = ''
   }
 
   const { data: resultado, isLoading: loadingResultado } = useQuery({
@@ -60,7 +89,7 @@ export default function Paso1({ expediente }: Props) {
   const resumen = resultado?.resumen || {}
 
   const canRun =
-    getArchivo('BAJADA_GESTION') &&
+    archivosGestion.length > 0 &&
     getArchivo('COMPROBANTES_EMITIDOS') &&
     getArchivo('TIPOS_CAMBIO')
 
@@ -101,15 +130,90 @@ export default function Paso1({ expediente }: Props) {
       {/* Carga de archivos */}
       <div className="card p-5">
         <h3 className="section-title">Archivos Requeridos</h3>
-        <div className="grid grid-cols-3 gap-4">
-          <FileUpload
-            label="Bajada de Gestión"
-            description="Reporte de ventas del ERP del distribuidor"
-            onUpload={(f) => handleUpload('BAJADA_GESTION', f)}
-            isLoading={uploading['BAJADA_GESTION']}
-            isUploaded={!!getArchivo('BAJADA_GESTION')}
-            uploadedName={getArchivo('BAJADA_GESTION')?.nombre_original}
-          />
+
+        {/* Bajada de Gestión — multi-archivo */}
+        <div className="mb-4">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <p className="text-xs font-semibold text-oag-text">Bajada de Gestión (ERP)</p>
+              <p className="text-xs text-oag-muted">Reportes de ventas del ERP del distribuidor — podés subir varios archivos</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => erpInputRef.current?.click()}
+              disabled={!!uploading['BAJADA_GESTION']}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border transition-colors',
+                archivosGestion.length === 0
+                  ? 'border-oag-blue text-oag-blue hover:bg-oag-blue/5'
+                  : 'border-oag-border text-oag-muted hover:text-oag-text hover:border-oag-text'
+              )}
+            >
+              {uploading['BAJADA_GESTION'] ? (
+                <Loader size={12} className="animate-spin" />
+              ) : (
+                <Plus size={12} />
+              )}
+              {archivosGestion.length === 0 ? 'Agregar archivo ERP' : 'Agregar otro'}
+            </button>
+            <input
+              ref={erpInputRef}
+              type="file"
+              multiple
+              accept=".xlsx,.xls,.csv"
+              className="hidden"
+              onChange={handleErpFileSelect}
+            />
+          </div>
+
+          {archivosGestion.length === 0 ? (
+            <div
+              onClick={() => erpInputRef.current?.click()}
+              className="border-2 border-dashed border-oag-border rounded-lg p-6 text-center cursor-pointer hover:border-oag-blue/50 hover:bg-oag-blue/5 transition-colors"
+            >
+              <FileText size={24} className="text-oag-muted mx-auto mb-2" />
+              <p className="text-xs text-oag-muted">
+                Arrastrá o hacé click para subir archivos ERP
+              </p>
+              <p className="text-xs text-oag-muted/70 mt-0.5">
+                Podés subir uno por tipo: facturas, notas de crédito, etc.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {archivosGestion.map((a: any) => (
+                <div
+                  key={a.id}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg border border-green-200 bg-green-50/50"
+                >
+                  <FileText size={13} className="text-green-700 flex-shrink-0" />
+                  <span className="text-xs font-medium text-oag-text flex-1 truncate" title={a.nombre_original}>
+                    {a.nombre_original}
+                  </span>
+                  {a.size_bytes && (
+                    <span className="text-xs text-oag-muted flex-shrink-0">{formatSize(a.size_bytes)}</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteArchivo(a.id, a.nombre_original)}
+                    disabled={deletingId === a.id}
+                    className="p-1 rounded hover:bg-red-100 text-oag-muted hover:text-red-700 transition-colors flex-shrink-0"
+                    title="Eliminar este archivo"
+                  >
+                    {deletingId === a.id ? (
+                      <Loader size={12} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={12} />
+                    )}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ARCA + Tipos de Cambio — un solo archivo cada uno */}
+        <div className="grid grid-cols-2 gap-4">
           <FileUpload
             label="Comprobantes Emitidos (ARCA)"
             description="Descarga de mis comprobantes emitidos desde ARCA"
@@ -168,6 +272,14 @@ export default function Paso1({ expediente }: Props) {
           />
 
           {/* Resumen */}
+          {resumen.archivos_gestion > 1 && (
+            <div className="card p-3 border-blue-200 bg-blue-50/40 flex items-center gap-2">
+              <FileText size={13} className="text-blue-700 flex-shrink-0" />
+              <p className="text-xs text-blue-800">
+                Se consolidaron <strong>{resumen.archivos_gestion} archivos ERP</strong> en el cruce
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-6 gap-3">
             {[
               { label: 'Total ARCA', value: resumen.total_arca, color: '' },

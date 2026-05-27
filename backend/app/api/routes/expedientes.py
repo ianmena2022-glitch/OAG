@@ -1,5 +1,6 @@
 import os
 import shutil
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -122,23 +123,28 @@ def subir_archivo(
     upload_dir = os.path.join(settings.UPLOAD_DIR, str(exp_id))
     os.makedirs(upload_dir, exist_ok=True)
 
-    filename = f"{tipo.value}_{file.filename}"
-    path = os.path.join(upload_dir, filename)
+    # BAJADA_GESTION admite múltiples archivos → nombre único con UUID
+    # El resto de tipos reemplaza el archivo anterior
+    if tipo == TipoArchivo.BAJADA_GESTION:
+        unique_prefix = uuid.uuid4().hex[:8]
+        filename = f"{tipo.value}_{unique_prefix}_{file.filename}"
+    else:
+        filename = f"{tipo.value}_{file.filename}"
+        # Eliminar archivo anterior del mismo tipo si existe
+        old = db.query(Archivo).filter(
+            Archivo.expediente_id == exp_id,
+            Archivo.tipo == tipo,
+        ).first()
+        if old:
+            if os.path.exists(old.path):
+                os.remove(old.path)
+            db.delete(old)
 
+    path = os.path.join(upload_dir, filename)
     with open(path, "wb") as f:
         content = file.file.read()
         f.write(content)
         size = len(content)
-
-    # Eliminar archivo anterior del mismo tipo si existe
-    old = db.query(Archivo).filter(
-        Archivo.expediente_id == exp_id,
-        Archivo.tipo == tipo,
-    ).first()
-    if old:
-        if os.path.exists(old.path):
-            os.remove(old.path)
-        db.delete(old)
 
     archivo = Archivo(
         expediente_id=exp_id,
@@ -171,6 +177,28 @@ def listar_archivos(
         }
         for a in archivos
     ]
+
+
+@router.delete("/{exp_id}/archivos/{archivo_id}")
+def eliminar_archivo(
+    exp_id: int,
+    archivo_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Elimina un archivo específico por ID. Útil para quitar uno de varios ERP subidos."""
+    _get_exp(exp_id, db, current_user)
+    archivo = db.query(Archivo).filter(
+        Archivo.id == archivo_id,
+        Archivo.expediente_id == exp_id,
+    ).first()
+    if not archivo:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    if os.path.exists(archivo.path):
+        os.remove(archivo.path)
+    db.delete(archivo)
+    db.commit()
+    return {"message": "Archivo eliminado"}
 
 
 def _get_exp(exp_id: int, db: Session, user: User) -> Expediente:

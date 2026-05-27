@@ -63,6 +63,8 @@ export const expedientesAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
+  eliminarArchivo: (expId: number, archivoId: number) =>
+    api.delete(`/api/expedientes/${expId}/archivos/${archivoId}`),
   // Colaboradores
   listarColaboradores: (id: number) =>
     api.get(`/api/expedientes/${id}/colaboradores`),

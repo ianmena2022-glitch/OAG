@@ -90,12 +90,28 @@ def ejecutar_paso1(
 ):
     exp = _get_exp(exp_id, db, current_user)
 
-    path_bajada = _get_archivo_path(exp_id, TipoArchivo.BAJADA_GESTION, db)
+    # Múltiples archivos de Bajada de Gestión
+    archivos_bajada = db.query(Archivo).filter(
+        Archivo.expediente_id == exp_id,
+        Archivo.tipo == TipoArchivo.BAJADA_GESTION,
+    ).order_by(Archivo.created_at).all()
+    if not archivos_bajada:
+        raise HTTPException(400, "No hay archivos de Bajada de Gestión cargados")
+    paths_bajada = []
+    for a in archivos_bajada:
+        if not os.path.exists(a.path):
+            raise HTTPException(
+                400,
+                f"El archivo '{a.nombre_original}' se perdió del servidor "
+                f"(probablemente por un redeploy). Volvé a subirlo desde el expediente."
+            )
+        paths_bajada.append((a.path, a.nombre_original))
+
     path_emitidos = _get_archivo_path(exp_id, TipoArchivo.COMPROBANTES_EMITIDOS, db)
     path_tc = _get_archivo_path(exp_id, TipoArchivo.TIPOS_CAMBIO, db)
 
     try:
-        resultado = paso1_service.ejecutar_paso1(path_bajada, path_emitidos, path_tc, exp_id)
+        resultado = paso1_service.ejecutar_paso1(paths_bajada, path_emitidos, path_tc, exp_id)
     except Exception as e:
         raise HTTPException(500, f"Error en Paso 1: {str(e)}")
 
