@@ -455,6 +455,45 @@ def _es_fila_basura_gestion(
     return False
 
 
+def _agregar_por_comprobante(registros: list) -> list:
+    """
+    Agrupa registros de Gestión por clave (tipo+numero) y suma los montos.
+
+    Necesario cuando el ERP exporta una fila por línea de producto en lugar
+    de una por comprobante (caso típico en Tango, SAP B1, Dynamics, etc.).
+
+    Ejemplo:
+      FC-00000-00002154  $500  (Roundup)    ┐
+      FC-00000-00002154  $300  (Glifosato)  ├→  FC-00000-00002154  $1.200
+      FC-00000-00002154  $400  (Herbicida)  ┘
+
+    Para NC los montos son negativos — se suman igual (se preserva el signo).
+    Metadatos (fecha, cliente, cuit) se toman del primer registro del grupo;
+    si el primero tiene cliente vacío se busca el primer no vacío.
+    """
+    from collections import defaultdict as _dd2
+    grupos: dict = _dd2(list)
+    for r in registros:
+        grupos[r["key"]].append(r)
+
+    agregados = []
+    for key, rows in grupos.items():
+        if len(rows) == 1:
+            agregados.append(rows[0])
+            continue
+        base = dict(rows[0])
+        base["monto_usd"]      = round(sum(r["monto_usd"]      for r in rows), 2)
+        base["monto_original"] = round(sum(r["monto_original"] for r in rows), 2)
+        # Cliente: preferir el primero no vacío
+        for r in rows:
+            if r.get("cliente", "").strip():
+                base["cliente"] = r["cliente"]
+                break
+        agregados.append(base)
+
+    return agregados
+
+
 def ejecutar_paso1(
     paths_bajada: list,   # lista de (path, nombre_original) tuples
     path_emitidos: str,
@@ -506,7 +545,12 @@ def ejecutar_paso1(
             "filas_en_archivo": len(df_gestion),
         })
 
-    registros_gestion = all_registros_gestion
+    # Agregar líneas de producto → un registro por comprobante
+    filas_gestion_raw = len(all_registros_gestion)
+    registros_gestion = _agregar_por_comprobante(all_registros_gestion)
+    if filas_gestion_raw != len(registros_gestion):
+        print(f"[GESTION] Agregación: {filas_gestion_raw} líneas → "
+              f"{len(registros_gestion)} comprobantes únicos")
 
     # 3. Cargar comprobantes ARCA (smart_parser)
     df_arca_raw, arca_mapping, arca_info = leer_comprobantes_emitidos_arca(path_emitidos)
@@ -550,7 +594,8 @@ def ejecutar_paso1(
 
     resumen = {
         "total_arca": len(registros_arca),
-        "total_gestion": len(registros_gestion),
+        "total_gestion": len(registros_gestion),       # comprobantes únicos
+        "filas_gestion_raw": filas_gestion_raw,         # líneas antes de agregar
         "archivos_gestion": len(paths_bajada),
         "ok": len(ok),
         "solo_arca": len(solo_arca),
