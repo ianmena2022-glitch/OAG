@@ -105,15 +105,23 @@ def detectar_por_keywords(
 
 # ─── Detección con IA (fallback) ───────────────────────────────────────────────
 
-SYSTEM_COLUMN_MAPPER = """Eres un experto en análisis de archivos Excel de sistemas ERP y AFIP/ARCA argentinos.
-Tu tarea es mapear las columnas reales de un archivo a un schema de columnas estándar requeridas.
+SYSTEM_COLUMN_MAPPER = """Eres un experto en contabilidad y análisis de archivos Excel de sistemas ERP argentinos (Tango, SAP B1, Dynamics NAV, Bejerman, Evolution, Flexxus, Oracle, Odoo, exportaciones ad-hoc) y de AFIP/ARCA.
+Tu tarea es mapear las columnas reales de un archivo Excel a un schema de columnas estándar requeridas.
+
+CONTEXTO: El archivo puede provenir de CUALQUIER sistema ERP. Los nombres de columnas son heterogéneos y varían enormemente entre distribuidores. Algunos archivos tienen encabezados en filas intermedias, columnas combinadas, o nomenclatura en español con/sin acentos.
 
 Reglas críticas:
-- "número de comprobante" se refiere al NÚMERO DE LA FACTURA, NO al CUIT del receptor/comprador.
-- "cuit_cliente" se refiere al CUIT del CLIENTE/COMPRADOR/RECEPTOR.
-- "monto_total" es el IMPORTE TOTAL CON IVA del comprobante.
-- "tipo_cambio" o "TC" es la cotización ARS→USD (>1 normalmente, ej: 1050.50). NO confundir con tipo de comprobante.
-- "moneda" indica si el monto está en pesos (ARS, PES, $) o dólares (USD, U$S).
+- "numero_comprobante" = NÚMERO DE LA FACTURA/COMPROBANTE (ej: 0001-00001234), NO el CUIT del receptor.
+- "punto_venta" = el prefijo de la factura (ej: "0001", "00002"), columnas como "PV", "Sucursal", "Pto. Vta.".
+- "cuit_cliente" = CUIT del CLIENTE/COMPRADOR/RECEPTOR. Formato argentino: XX-XXXXXXXX-X.
+- "monto_total" = importe TOTAL CON IVA. En algunos ERPs se llama "Total", "Importe", "Bruto".
+- "monto_neto" = importe SIN impuestos: "Neto", "Gravado", "Base imponible".
+- "tipo_cambio" = cotización ARS→USD (número >1, ej: 1050.50). NO confundir con "tipo de comprobante".
+- "moneda" = divisa: ARS/$, USD/U$S/Dólar. Puede ser un código o descripción.
+- "tipo_comprobante" = clase del documento: Factura/FC, Nota de Crédito/NC, Nota de Débito/ND.
+- "fecha" = fecha de EMISIÓN del comprobante. NO confundir con fecha de vencimiento o pago.
+
+IMPORTANTE: Si ves columnas con nombres muy distintos a los aliases del schema pero que por el contenido de muestra claramente corresponden a un campo estándar, mapéalas igual (priorizá el contenido sobre el nombre).
 
 Devolvé ÚNICAMENTE un JSON con el formato exacto:
 {
@@ -121,7 +129,7 @@ Devolvé ÚNICAMENTE un JSON con el formato exacto:
   "confianza": 0.0 a 1.0,
   "warnings": ["mensaje opcional si algo es ambiguo o falta"]
 }
-Si una columna estándar no existe, usa null. Confianza alta solo si estás seguro."""
+Si una columna estándar no existe en el archivo, usá null. Confianza alta (>0.8) solo si estás seguro del mapping. Bajá la confianza si hay ambigüedad."""
 
 
 def detectar_con_ia(
