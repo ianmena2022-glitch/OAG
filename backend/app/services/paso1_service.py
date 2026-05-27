@@ -139,6 +139,8 @@ ARCA_SCHEMA = {
               "fecha comprobante", "fecha"],
     "moneda": ["moneda", "mon"],
     "tipo_cambio": ["tipo de cambio", "t/c", "tc", "cambio"],
+    "monto_neto": ["importe neto gravado", "neto gravado", "imp. neto gravado",
+                   "importe neto", "neto", "gravado", "base imponible"],
     "monto_total": ["importe total", "imp. total", "imp total", "total"],
 }
 
@@ -714,16 +716,25 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
     col_cuit      = mapping.get("cuit_cliente")
     col_moneda    = mapping.get("moneda")
     col_tc        = mapping.get("tipo_cambio")
+    col_neto      = mapping.get("monto_neto")
     col_total     = mapping.get("monto_total")
     col_total_usd = mapping.get("monto_total_usd")  # columna explícita en USD
 
+    # Columna de monto a usar: neto > total > total_usd
+    # Neto es la base de comparación correcta para auditoría (excluye IVA)
+    col_monto_base = col_neto or col_total
+    if col_neto:
+        print(f"[GESTION] Usando monto NETO: '{col_neto}'")
+    elif col_total:
+        print(f"[GESTION] Monto neto no encontrado — usando TOTAL: '{col_total}' (puede incluir IVA)")
+
     # Pre-calcular moneda inferida si no hay columna de moneda ni de total USD
     moneda_global = None
-    if not col_moneda and not col_total_usd and col_total:
+    if not col_moneda and not col_total_usd and col_monto_base:
         # Leer muestra de montos para inferir moneda por valor
         muestra_montos = []
         for _, row in df.head(50).iterrows():
-            m = normalizar_monto(row.get(col_total))
+            m = normalizar_monto(row.get(col_monto_base))
             if m > 0:
                 muestra_montos.append(m)
         moneda_global = _inferir_moneda_por_valor(muestra_montos)
@@ -754,19 +765,17 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
             else:
                 numero = normalizar_numero_comprobante(valor_combinado=numero_raw)
 
-            # Monto USD: 3 estrategias en orden de preferencia
-            if col_total_usd:
-                # 1. Columna explícita en USD → usar directamente
+            # Monto: prioridad neto > total > columna USD explícita
+            if col_total_usd and not col_monto_base:
+                # Columna explícita en USD y sin neto/total → usar directamente
                 monto_usd = normalizar_monto(row.get(col_total_usd))
                 monto_original = monto_usd
                 moneda = "USD"
-            elif col_total:
-                monto_original = normalizar_monto(row.get(col_total))
+            elif col_monto_base:
+                monto_original = normalizar_monto(row.get(col_monto_base))
                 if col_moneda:
-                    # 2. Columna de moneda explícita
                     moneda = str(row.get(col_moneda, "ARS")).upper().strip() or "ARS"
                 else:
-                    # 3. Moneda inferida por valor (pre-calculada)
                     moneda = moneda_global or "ARS"
                 tc = normalizar_monto(row.get(col_tc)) if col_tc else 0
                 monto_usd = _convertir_a_usd(monto_original, moneda, tc, fecha, tc_map)
@@ -814,13 +823,21 @@ def _procesar_arca(df: pd.DataFrame, tc_map: dict, mapping: dict = None) -> list
     registros = []
     mapping = mapping or {}
 
-    col_tipo = mapping.get("tipo_comprobante")
-    col_pv = mapping.get("punto_venta")
-    col_num = mapping.get("numero_comprobante")
+    col_tipo  = mapping.get("tipo_comprobante")
+    col_pv    = mapping.get("punto_venta")
+    col_num   = mapping.get("numero_comprobante")
     col_fecha = mapping.get("fecha")
     col_moneda = mapping.get("moneda")
-    col_tc = mapping.get("tipo_cambio")
+    col_tc    = mapping.get("tipo_cambio")
+    col_neto  = mapping.get("monto_neto")
     col_total = mapping.get("monto_total")
+
+    # Neto > total — misma lógica que gestión para comparación consistente
+    col_monto_base = col_neto or col_total
+    if col_neto:
+        print(f"[ARCA] Usando monto NETO: '{col_neto}'")
+    elif col_total:
+        print(f"[ARCA] Monto neto no encontrado — usando TOTAL: '{col_total}'")
 
     for _, row in df.iterrows():
         try:
@@ -836,7 +853,7 @@ def _procesar_arca(df: pd.DataFrame, tc_map: dict, mapping: dict = None) -> list
 
             moneda = str(row.get(col_moneda, "ARS")).upper().strip() if col_moneda else "ARS"
             tc = normalizar_monto(row.get(col_tc)) if col_tc else 0
-            monto_total = normalizar_monto(row.get(col_total, 0))
+            monto_total = normalizar_monto(row.get(col_monto_base, 0) if col_monto_base else 0)
 
             monto_usd = _convertir_a_usd(monto_total, moneda, tc, fecha, tc_map)
 
