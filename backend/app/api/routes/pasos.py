@@ -38,6 +38,12 @@ def _get_archivo_path(exp_id, tipo, db) -> str:
     ).first()
     if not a:
         raise HTTPException(400, f"Archivo {tipo.value} no cargado")
+    if not os.path.exists(a.path):
+        raise HTTPException(
+            400,
+            f"El archivo {tipo.value} se perdió del servidor (probablemente por un "
+            f"redeploy). Volvé a subirlo desde el expediente."
+        )
     return a.path
 
 
