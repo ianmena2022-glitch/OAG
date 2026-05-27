@@ -5,7 +5,7 @@ import { useNotificationStore } from '../../store'
 import { formatUSD } from '../../lib/utils'
 import FileUpload from '../../components/FileUpload'
 import DataTable, { Column } from '../../components/DataTable'
-import { Play, Loader, Info, Plus, Trash2, FileText } from 'lucide-react'
+import { Play, Loader, Info, Plus, Trash2, FileText, AlertTriangle } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import PasoFeedback from '../../components/PasoFeedback'
 
@@ -295,6 +295,17 @@ export default function Paso1({ expediente }: Props) {
             parserDiagnostico={resultado.parser_diagnostico}
           />
 
+          {/* Alertas estructurales (SOLO_GESTION, etc.) */}
+          {(resultado.alertas || []).map((alerta: any, i: number) => (
+            <div key={i} className="card p-4 border-red-300 bg-red-50 flex items-start gap-3">
+              <AlertTriangle size={16} className="text-red-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-red-800">{alerta.titulo}</p>
+                <p className="text-xs text-red-700 mt-0.5 leading-relaxed">{alerta.detalle}</p>
+              </div>
+            </div>
+          ))}
+
           {/* Resumen */}
           {resumen.archivos_gestion > 1 && (
             <div className="card p-3 border-blue-200 bg-blue-50/40 flex items-center gap-2">
@@ -311,7 +322,7 @@ export default function Paso1({ expediente }: Props) {
               { label: 'Match OK', value: resumen.ok, color: 'text-green-700' },
               { label: 'Diferencias', value: resumen.con_diferencia, color: resumen.con_diferencia > 0 ? 'text-yellow-700' : 'text-green-700' },
               { label: 'Solo ARCA', value: resumen.solo_arca, color: resumen.solo_arca > 0 ? 'text-red-700' : '' },
-              { label: 'Solo Gestión', value: resumen.solo_gestion, color: resumen.solo_gestion > 0 ? 'text-orange-700' : '' },
+              { label: 'Solo Gestión', value: resumen.solo_gestion, color: resumen.solo_gestion > 0 ? 'text-red-700 font-extrabold' : '' },
             ].map((s, i) => (
               <div key={i} className="card p-3">
                 <p className="text-xs text-oag-muted">{s.label}</p>

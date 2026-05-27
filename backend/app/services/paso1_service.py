@@ -674,6 +674,23 @@ def ejecutar_paso1(
         "monto_total_gestion_usd": sum(r["monto_usd"] for r in registros_gestion),
     }
 
+    # Alertas estructurales (no-IA) — problemas que no deberían ocurrir
+    alertas = []
+    if solo_gestion:
+        monto_sg = sum(r["monto_usd_gestion"] for r in solo_gestion)
+        ejemplos = [r["numero"] for r in solo_gestion[:3]]
+        alertas.append({
+            "nivel": "error",
+            "titulo": f"{len(solo_gestion)} comprobante(s) en Gestión sin registro en ARCA",
+            "detalle": (
+                f"Estos comprobantes existen en el ERP pero ARCA no tiene registro fiscal de ellos. "
+                f"Monto total: USD {monto_sg:,.2f}. "
+                f"Ejemplos: {', '.join(ejemplos)}{'...' if len(solo_gestion) > 3 else ''}. "
+                f"Verificar si faltan archivos ERP, si los comprobantes fueron anulados, "
+                f"o si hay comprobantes emitidos fuera del sistema."
+            ),
+        })
+
     # Validación con IA
     from ..ai.validator import validar_paso
     validacion = validar_paso(1, resumen, muestra=conciliacion[:5])
@@ -681,6 +698,7 @@ def ejecutar_paso1(
     return {
         "conciliacion": conciliacion,
         "resumen": resumen,
+        "alertas": alertas,
         "bajada_normalizada_path": path_normalizada,
         "parser_diagnostico": parser_diagnostico,
         "validacion": validacion,
@@ -1024,29 +1042,31 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
     # ── Paso 3: Sobrantes ────────────────────────────────────────────────────
     for r_arca in arca:
         if id(r_arca) not in arca_usados:
+            monto = r_arca["monto_usd_arca"]
             conciliacion.append({
                 "key": r_arca["key"],
                 "tipo": r_arca["tipo"],
                 "numero": r_arca["numero"],
                 "fecha": r_arca["fecha"],
                 "cliente": "",
-                "monto_usd_arca": r_arca["monto_usd_arca"],
-                "monto_usd_gestion": None,
-                "diferencia_usd": None,
+                "monto_usd_arca": monto,
+                "monto_usd_gestion": 0.0,
+                "diferencia_usd": round(monto, 2),   # arca - gestion = arca - 0
                 "estado": "SOLO_ARCA",
             })
 
     for r_gest in gestion:
         if id(r_gest) not in gestion_usados:
+            monto = r_gest["monto_usd"]
             conciliacion.append({
                 "key": r_gest["key"],
                 "tipo": r_gest["tipo"],
                 "numero": r_gest["numero"],
                 "fecha": r_gest["fecha"],
                 "cliente": r_gest.get("cliente", ""),
-                "monto_usd_arca": None,
-                "monto_usd_gestion": r_gest["monto_usd"],
-                "diferencia_usd": None,
+                "monto_usd_arca": 0.0,
+                "monto_usd_gestion": monto,
+                "diferencia_usd": round(-monto, 2),  # arca - gestion = 0 - gestion
                 "estado": "SOLO_GESTION",
             })
 
