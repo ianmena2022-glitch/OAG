@@ -477,7 +477,12 @@ def create_initial_admin():
     try:
         existing = db.query(User).filter(User.role == UserRole.ADMIN).first()
         if existing:
-            print(f"✓ Admin ya existe: {existing.email}")
+            # Siempre re-hashear por si el hash anterior estaba roto (ej: bcrypt version mismatch)
+            existing.hashed_password = get_password_hash("ogsa2024")
+            existing.email = "admin@ogsa.com"
+            existing.is_active = True
+            db.commit()
+            print(f"✓ Admin actualizado: {existing.email}")
         else:
             admin = User(
                 email="admin@ogsa.com",
