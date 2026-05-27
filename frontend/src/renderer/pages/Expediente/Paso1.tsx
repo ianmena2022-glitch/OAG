@@ -332,16 +332,26 @@ export default function Paso1({ expediente }: Props) {
           </div>
 
           {/* Montos totales */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="card p-3">
-              <p className="text-xs text-oag-muted">Total Facturado ARCA (USD)</p>
-              <p className="text-lg font-bold text-oag-text">{formatUSD(resumen.monto_total_arca_usd)}</p>
-            </div>
-            <div className="card p-3">
-              <p className="text-xs text-oag-muted">Total Facturado Gestión (USD)</p>
-              <p className="text-lg font-bold text-oag-text">{formatUSD(resumen.monto_total_gestion_usd)}</p>
-            </div>
-          </div>
+          {(() => {
+            const diff = (resumen.monto_total_gestion_usd ?? 0) - (resumen.monto_total_arca_usd ?? 0)
+            const diffColor = Math.abs(diff) <= 1 ? 'text-green-700' : diff > 0 ? 'text-yellow-700' : 'text-red-700'
+            return (
+              <div className="grid grid-cols-3 gap-3">
+                <div className="card p-3">
+                  <p className="text-xs text-oag-muted">Total Facturado ARCA (USD)</p>
+                  <p className="text-lg font-bold text-oag-text">{formatUSD(resumen.monto_total_arca_usd)}</p>
+                </div>
+                <div className="card p-3">
+                  <p className="text-xs text-oag-muted">Total Facturado Gestión (USD)</p>
+                  <p className="text-lg font-bold text-oag-text">{formatUSD(resumen.monto_total_gestion_usd)}</p>
+                </div>
+                <div className="card p-3">
+                  <p className="text-xs text-oag-muted">Diferencia Total (USD)</p>
+                  <p className={cn('text-lg font-bold', diffColor)}>{formatUSD(diff)}</p>
+                </div>
+              </div>
+            )
+          })()}
 
           {/* Tabla de conciliación */}
           <div className="card p-5">
