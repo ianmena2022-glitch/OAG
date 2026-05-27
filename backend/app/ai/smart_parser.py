@@ -125,6 +125,51 @@ def detectar_metadata_reporte(path: str, header_row: int) -> dict:
     return metadata
 
 
+# ─── Sanity check de contenido ────────────────────────────────────────────────
+
+# Códigos numéricos que AFIP usa para "Tipo de Comprobante".
+# Si una columna mapeada como numero_comprobante tiene solo estos valores
+# → es la columna de tipo, no de número → hay que redirigir a IA.
+_CODIGOS_AFIP = frozenset([
+    "1","2","3","4","5","6","7","8","9","10","11","12","13",
+    "51","52","53",
+    "201","202","203","206","207","208","211","212","213",
+])
+
+
+def _verificar_contenido_mapping(df: pd.DataFrame, mapping: dict) -> list:
+    """
+    Valida semánticamente que las columnas mapeadas contengan el tipo de dato
+    esperado, detectando errores que el keyword matching no puede ver.
+
+    Retorna lista de campos cuyo mapeo es sospechoso (deben re-detectarse con IA).
+
+    Checks actuales
+    ───────────────
+    numero_comprobante
+        Si ≥ 80 % de la muestra son códigos de tipo AFIP (1-213) con poca
+        variedad (≤ 10 valores únicos) → la columna es probablemente
+        "Tipo de Comprobante" mal asignada (ocurre cuando el nombre de
+        "Número Desde" tiene encoding roto y no matchea keywords).
+    """
+    sospechosos = []
+
+    col = mapping.get("numero_comprobante")
+    if col and col in df.columns:
+        muestra = (
+            df[col].dropna().head(30).astype(str).str.strip().tolist()
+        )
+        muestra = [v for v in muestra if v and v.lower() not in ("nan", "none", "")]
+        if muestra:
+            n_codigos = sum(1 for v in muestra if v in _CODIGOS_AFIP)
+            n_unicos  = len(set(muestra))
+            # Condición doble: mayoría de valores son códigos AFIP + poca diversidad
+            if n_codigos / len(muestra) >= 0.8 and n_unicos <= 10:
+                sospechosos.append("numero_comprobante")
+
+    return sospechosos
+
+
 # ─── Detección de columnas por keywords ────────────────────────────────────────
 
 def detectar_por_keywords(
@@ -286,7 +331,11 @@ def parsear_excel(
         if cached:
             df = pd.read_excel(path, header=cached["header_row"], dtype=str)
             df = df.dropna(how="all").dropna(axis=1, how="all")
-            return {**cached, "df": df, "metodo": "cache"}
+            # Sanity check incluso sobre el cache: si el mapping guardado es
+            # semánticamente incorrecto, re-detectamos en lugar de propagarlo.
+            if not _verificar_contenido_mapping(df, cached["mapping"]):
+                return {**cached, "df": df, "metodo": "cache"}
+            # Si hay sospechosos: caemos al flujo normal de detección
 
     # 2. Detectar header y metadatos del reporte (título, tipo inferido)
     header_row = detectar_header_row(path)
@@ -306,9 +355,19 @@ def parsear_excel(
     metodo = "keywords"
     confianza = 1.0
 
+    # 3b. Sanity check de contenido — atrapa mapeos semánticamente incorrectos
+    #     que el keyword matching aceptó (ej: columna de tipo AFIP como número)
+    contenido_sospechoso = _verificar_contenido_mapping(df, mapping)
+    if contenido_sospechoso:
+        warnings.append(
+            f"Sanity check: contenido sospechoso en {contenido_sospechoso} "
+            f"(posible encoding roto o columna errónea) → re-detectando con IA"
+        )
+
     # 4. Validar confianza
     criticas = columnas_criticas or list(schema.keys())
-    faltantes = [c for c in criticas if not mapping.get(c)]
+    # Unir columnas faltantes + columnas con contenido sospechoso
+    faltantes = list({c for c in criticas if not mapping.get(c)} | set(contenido_sospechoso))
 
     if faltantes:
         # Fallback a IA
