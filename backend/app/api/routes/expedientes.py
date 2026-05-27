@@ -248,7 +248,9 @@ def invitar_colaborador(
     if not _es_owner_o_admin(exp, current_user):
         raise HTTPException(status_code=403, detail="Solo el dueño puede invitar colaboradores")
 
-    target = db.query(User).filter(User.email == data.email).first()
+    from sqlalchemy import func
+    email_norm = (data.email or "").strip().lower()
+    target = db.query(User).filter(func.lower(User.email) == email_norm).first()
     if not target:
         raise HTTPException(status_code=404, detail=f"No existe un usuario con email {data.email}")
     if not target.is_active:

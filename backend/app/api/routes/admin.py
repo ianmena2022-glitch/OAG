@@ -66,10 +66,12 @@ def crear_usuario(
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
-    if db.query(User).filter(User.email == data.email).first():
+    from sqlalchemy import func
+    email_norm = (data.email or "").strip().lower()
+    if db.query(User).filter(func.lower(User.email) == email_norm).first():
         raise HTTPException(status_code=400, detail="El email ya está registrado")
     user = User(
-        email=data.email,
+        email=email_norm,
         nombre=data.nombre,
         hashed_password=get_password_hash(data.password),
         role=data.role,

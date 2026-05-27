@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from ...core.database import get_db
 from ...core.auth import verify_password, get_password_hash, create_access_token
 from ...core.deps import get_current_user
@@ -11,7 +12,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/login", response_model=TokenResponse)
 def login(data: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == data.email).first()
+    # Email comparison case-insensitive
+    email_norm = (data.email or "").strip().lower()
+    user = db.query(User).filter(func.lower(User.email) == email_norm).first()
     if not user or not verify_password(data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Email o contraseña incorrectos")
     if not user.is_active:

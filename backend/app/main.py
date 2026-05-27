@@ -502,4 +502,24 @@ def create_initial_admin():
         db.close()
 
 
+def normalizar_emails_a_lowercase():
+    """One-time: bajar todos los emails de usuarios a lowercase (idempotente)."""
+    db = SessionLocal()
+    try:
+        users = db.query(User).all()
+        cambios = 0
+        for u in users:
+            if u.email and u.email != u.email.lower():
+                u.email = u.email.lower()
+                cambios += 1
+        if cambios:
+            db.commit()
+            print(f"✓ {cambios} emails normalizados a lowercase")
+    except Exception as e:
+        print(f"✗ Error normalizando emails: {e}")
+    finally:
+        db.close()
+
+
 create_initial_admin()
+normalizar_emails_a_lowercase()
