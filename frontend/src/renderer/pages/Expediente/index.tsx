@@ -2,14 +2,16 @@ import React, { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { expedientesAPI } from '../../lib/api'
+import { useAuthStore } from '../../store'
 import { cn, PASO_LABELS } from '../../lib/utils'
-import { Loader, CheckCircle, Circle, ArrowRight } from 'lucide-react'
+import { Loader, CheckCircle, Circle, ArrowRight, Users } from 'lucide-react'
 import Paso1 from './Paso1'
 import Paso2 from './Paso2'
 import Paso3 from './Paso3'
 import Paso4 from './Paso4'
 import Paso5 from './Paso5'
 import Paso6 from './Paso6'
+import ColaboradoresPanel from '../../components/ColaboradoresPanel'
 
 const PASO_COMPONENTS: Record<number, React.ComponentType<{ expediente: any }>> = {
   1: Paso1,
@@ -29,12 +31,17 @@ const ESTADO_COLORS: Record<string, string> = {
 export default function ExpedientePage() {
   const { id } = useParams<{ id: string }>()
   const [pasoActivo, setPasoActivo] = useState(1)
+  const [colabOpen, setColabOpen] = useState(false)
+  const currentUser = useAuthStore((s) => s.user)
 
   const { data: expediente, isLoading, refetch } = useQuery({
     queryKey: ['expediente', id],
     queryFn: () => expedientesAPI.obtener(Number(id)).then((r) => r.data),
     refetchInterval: 5000,
   })
+
+  const esColaborador =
+    expediente && currentUser && expediente.user_id !== currentUser.id && currentUser.role !== 'ADMIN'
 
   if (isLoading) {
     return (
@@ -56,9 +63,23 @@ export default function ExpedientePage() {
           <h2 className="font-semibold text-sm text-oag-text truncate">{expediente.nombre_distribuidor}</h2>
           <p className="text-xs text-oag-muted mt-0.5">CUIT: {expediente.cuit_distribuidor}</p>
           <p className="text-xs text-oag-muted">Período: {expediente.anio_analisis}</p>
-          <span className={cn('inline-block mt-2 text-xs px-2 py-0.5 rounded font-medium', ESTADO_COLORS[expediente.estado])}>
-            {expediente.estado === 'BORRADOR' ? 'Borrador' : expediente.estado === 'EN_PROCESO' ? 'En Proceso' : 'Completado'}
-          </span>
+          <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+            <span className={cn('text-xs px-2 py-0.5 rounded font-medium', ESTADO_COLORS[expediente.estado])}>
+              {expediente.estado === 'BORRADOR' ? 'Borrador' : expediente.estado === 'EN_PROCESO' ? 'En Proceso' : 'Completado'}
+            </span>
+            {esColaborador && (
+              <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">
+                Colaborador
+              </span>
+            )}
+          </div>
+          <button
+            onClick={() => setColabOpen(true)}
+            className="mt-3 w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1.5 border border-oag-border rounded hover:bg-oag-light transition-colors text-oag-text"
+          >
+            <Users size={12} />
+            Colaboradores
+          </button>
         </div>
 
         <div className="card overflow-hidden">
@@ -101,6 +122,13 @@ export default function ExpedientePage() {
       <div className="flex-1 min-w-0">
         {PasoComponent && <PasoComponent expediente={{ ...expediente, refetch }} />}
       </div>
+
+      {colabOpen && (
+        <ColaboradoresPanel
+          expedienteId={Number(id)}
+          onClose={() => setColabOpen(false)}
+        />
+      )}
     </div>
   )
 }

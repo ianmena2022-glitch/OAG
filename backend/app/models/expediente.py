@@ -1,8 +1,19 @@
 import enum
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Enum, ForeignKey, JSON, Date, Float, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Enum, ForeignKey, JSON, Date, Float, Boolean, Table
 from sqlalchemy.orm import relationship
 from ..core.database import Base
+
+
+# Tabla de asociación many-to-many entre Expediente y User (colaboradores invitados)
+expediente_colaboradores = Table(
+    "expediente_colaboradores",
+    Base.metadata,
+    Column("expediente_id", Integer, ForeignKey("expedientes.id", ondelete="CASCADE"), primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("invited_at", DateTime, default=datetime.utcnow),
+    Column("invited_by", Integer, ForeignKey("users.id"), nullable=True),
+)
 
 
 class EstadoExpediente(str, enum.Enum):
@@ -40,6 +51,12 @@ class Expediente(Base):
     archivos = relationship("Archivo", back_populates="expediente", cascade="all, delete-orphan")
     tipos_cambio = relationship("TipoCambio", back_populates="expediente", cascade="all, delete-orphan")
     resultados = relationship("ResultadoPaso", back_populates="expediente", cascade="all, delete-orphan")
+    colaboradores = relationship(
+        "User",
+        secondary=expediente_colaboradores,
+        primaryjoin="Expediente.id == expediente_colaboradores.c.expediente_id",
+        secondaryjoin="User.id == expediente_colaboradores.c.user_id",
+    )
 
 
 class Archivo(Base):

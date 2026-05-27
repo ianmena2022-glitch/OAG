@@ -63,6 +63,13 @@ export const expedientesAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
+  // Colaboradores
+  listarColaboradores: (id: number) =>
+    api.get(`/api/expedientes/${id}/colaboradores`),
+  invitarColaborador: (id: number, email: string) =>
+    api.post(`/api/expedientes/${id}/colaboradores`, { email }),
+  removerColaborador: (id: number, userId: number) =>
+    api.delete(`/api/expedientes/${id}/colaboradores/${userId}`),
 }
 
 // ── Pasos ─────────────────────────────────────────────────────────────────────
