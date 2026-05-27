@@ -1,11 +1,11 @@
-import React, { useState } from 'react'
+﻿import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Loader } from 'lucide-react'
 import { authAPI } from '../lib/api'
 import { useAuthStore, useNotificationStore } from '../store'
 
 export default function Login() {
-  const [email, setEmail] = useState('admin@oag.com')
+  const [email, setEmail] = useState('admin@ogsa.com')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const { login } = useAuthStore()
@@ -33,7 +33,7 @@ export default function Login() {
         {/* Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-14 h-14 bg-oag-dark rounded-lg mb-4">
-            <span className="text-white font-bold text-xl">OAG</span>
+            <span className="text-white font-bold text-xl">OGSA</span>
           </div>
           <h1 className="text-xl font-semibold text-oag-text">Sistema de Auditorías</h1>
           <p className="text-oag-muted text-sm mt-1">Ingresá tus credenciales para continuar</p>
@@ -49,7 +49,7 @@ export default function Login() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="input-field"
-                placeholder="usuario@oag.com"
+                placeholder="usuario@ogsa.com"
                 required
                 autoFocus
               />
@@ -77,7 +77,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-xs text-oag-muted mt-6">
-          OAG Auditores © {new Date().getFullYear()}
+          OGSA Auditores © {new Date().getFullYear()}
         </p>
       </div>
     </div>

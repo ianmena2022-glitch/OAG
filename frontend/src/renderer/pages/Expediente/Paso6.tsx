@@ -1,4 +1,4 @@
-import React from 'react'
+﻿import React from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { pasosAPI } from '../../lib/api'
 import { useNotificationStore } from '../../store'
@@ -31,7 +31,7 @@ export default function Paso6({ expediente }: Props) {
   const downloadMutation = useMutation({
     mutationFn: () => pasosAPI.descargarPaso(expediente.id, 6),
     onSuccess: (res) => {
-      downloadBlob(res.data, `OAG_Informe_Final_Exp${expediente.id}.xlsx`)
+      downloadBlob(res.data, `OGSA_Informe_Final_Exp${expediente.id}.xlsx`)
       push('success', 'Descarga iniciada')
     },
     onError: () => push('error', 'Error al descargar'),
@@ -130,7 +130,7 @@ export default function Paso6({ expediente }: Props) {
           <div className="mt-4 flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded">
             <FileSpreadsheet size={16} className="text-green-700" />
             <div>
-              <p className="text-xs font-medium text-green-800">OAG_Informe_Final_Exp{expediente.id}.xlsx</p>
+              <p className="text-xs font-medium text-green-800">OGSA_Informe_Final_Exp{expediente.id}.xlsx</p>
               <p className="text-xs text-green-700">4 hojas con Anexo II incluyendo columna Nombre Glosario</p>
             </div>
           </div>

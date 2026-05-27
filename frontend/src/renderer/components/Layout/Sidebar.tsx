@@ -1,4 +1,4 @@
-import React from 'react'
+﻿import React from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { LayoutDashboard, Settings, LogOut, Users, BookOpen } from 'lucide-react'
 import { useAuthStore } from '../../store'
@@ -17,7 +17,7 @@ export default function Sidebar() {
     <div className="w-56 h-full bg-oag-dark flex flex-col flex-shrink-0">
       {/* Logo */}
       <div className="px-5 py-5 border-b border-white/10">
-        <div className="text-white font-bold text-lg tracking-tight">OAG</div>
+        <div className="text-white font-bold text-lg tracking-tight">OGSA</div>
         <div className="text-blue-300 text-xs mt-0.5 font-light">Sistema de Auditorías</div>
       </div>
 

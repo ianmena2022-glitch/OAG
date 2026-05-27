@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+﻿import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
@@ -23,7 +23,7 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
-    mainWindow.setTitle('OAG — Sistema de Auditorías Comerciales')
+    mainWindow.setTitle('OGSA — Sistema de Auditorías Comerciales')
   })
 
   // F12 abre DevTools (útil para debug)
@@ -98,7 +98,7 @@ ipcMain.handle('update:install', () => {
 })
 
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.oag.auditoria')
+  electronApp.setAppUserModelId('com.ogsa.auditoria')
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

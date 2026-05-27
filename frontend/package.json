@@ -1,9 +1,9 @@
-{
-  "name": "oag-auditoria",
+﻿{
+  "name": "ogsa-auditoria",
   "version": "1.0.0",
-  "description": "OAG Sistema de Auditorías Comerciales",
+  "description": "OGSA Sistema de Auditorías Comerciales",
   "main": "out/main/index.js",
-  "author": "OAG Auditores",
+  "author": "OGSA Auditores",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
@@ -46,8 +46,8 @@
     "vite": "^5.4.11"
   },
   "build": {
-    "appId": "com.oag.auditoria",
-    "productName": "OAG Auditorías",
+    "appId": "com.ogsa.auditoria",
+    "productName": "OGSA Auditorías",
     "directories": {
       "output": "release"
     },
@@ -64,7 +64,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "OAG Auditorías"
+      "shortcutName": "OGSA Auditorías"
     }
   }
 }

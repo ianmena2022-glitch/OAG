@@ -3,7 +3,7 @@ from typing import Optional
 
 
 class Settings(BaseSettings):
-    APP_NAME: str = "OAG Auditorías"
+    APP_NAME: str = "OGSA Auditorías"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
 
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     CLAUDE_MODEL: str = "claude-opus-4-5"
 
     # Files
-    UPLOAD_DIR: str = "/tmp/oag_uploads"
+    UPLOAD_DIR: str = "/tmp/ogsa_uploads"
     MAX_FILE_SIZE_MB: int = 50
 
     # CORS

@@ -1,4 +1,4 @@
-import os
+﻿import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -36,7 +36,7 @@ app.include_router(pasos.router, prefix="/api")
 
 GITHUB_RELEASE_URL = (
     "https://github.com/ianmena2022-glitch/OAG/releases/latest/download/"
-    "OAG.Auditorias.Setup.1.0.0.exe"
+    "OGSA.Auditorias.Setup.1.0.0.exe"
 )
 
 LANDING_HTML = """<!DOCTYPE html>
@@ -44,7 +44,7 @@ LANDING_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>OAG — Sistema de Auditorías Comerciales</title>
+  <title>OGSA — Sistema de Auditorías Comerciales</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -307,7 +307,7 @@ LANDING_HTML = """<!DOCTYPE html>
 
   <nav>
     <div class="nav-brand">
-      <div class="nav-logo">OAG</div>
+      <div class="nav-logo">OGSA</div>
       <span class="nav-name">Auditorías Comerciales</span>
     </div>
     <span class="nav-badge">EN PRODUCCIÓN</span>
@@ -315,7 +315,7 @@ LANDING_HTML = """<!DOCTYPE html>
 
   <section class="hero">
     <div class="hero-inner">
-      <p class="hero-eyebrow">OAG Auditores · Syngenta Argentina</p>
+      <p class="hero-eyebrow">OGSA Auditores · Syngenta Argentina</p>
       <h1>Sistema de<br/><span>Auditorías Comerciales</span></h1>
       <p>
         Plataforma integral para auditar distribuidores de Syngenta Argentina.
@@ -369,7 +369,7 @@ LANDING_HTML = """<!DOCTYPE html>
       <div class="feature-card">
         <div class="feature-icon">📊</div>
         <h3>Exportación Excel formateada</h3>
-        <p>Informes con 3 anexos (Compras, Agroquímicos, CRM) con estilos OAG listos para entregar.</p>
+        <p>Informes con 3 anexos (Compras, Agroquímicos, CRM) con estilos OGSA listos para entregar.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon">☁️</div>
@@ -439,12 +439,12 @@ LANDING_HTML = """<!DOCTYPE html>
         <polyline points="7 10 12 15 17 10"/>
         <line x1="12" y1="15" x2="12" y2="3"/>
       </svg>
-      Descargar OAG Auditorías
+      Descargar OGSA Auditorías
     </a>
   </section>
 
   <footer>
-    OAG Auditores &copy; 2026 &nbsp;·&nbsp; oag.up.railway.app &nbsp;·&nbsp; Confidencial
+    OGSA Auditores &copy; 2026 &nbsp;·&nbsp; oag.up.railway.app &nbsp;·&nbsp; Confidencial
   </footer>
 
 </body>
@@ -480,15 +480,15 @@ def create_initial_admin():
             print(f"✓ Admin ya existe: {existing.email}")
         else:
             admin = User(
-                email="admin@oag.com",
-                nombre="Administrador OAG",
-                hashed_password=get_password_hash("oag2024"),
+                email="admin@ogsa.com",
+                nombre="Administrador OGSA",
+                hashed_password=get_password_hash("ogsa2024"),
                 role=UserRole.ADMIN,
                 is_active=True,
             )
             db.add(admin)
             db.commit()
-            print("✓ Usuario admin creado: admin@oag.com / oag2024")
+            print("✓ Usuario admin creado: admin@ogsa.com / ogsa2024")
     except Exception as e:
         print(f"✗ Error creando admin: {e}")
         import traceback

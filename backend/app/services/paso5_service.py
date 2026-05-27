@@ -1,4 +1,4 @@
-"""
+﻿"""
 Paso 5 — Informe Ejecutivo (Compras y Ventas)
 Genera Excel + PDF con 3 anexos: Resumen Compras (top 90%), Venta Agroquímicos, Cruce CRM.
 """
@@ -163,7 +163,7 @@ def _hoja_portada(wb: Workbook, info: Dict):
 
     ws.merge_cells("B2:I4")
     title = ws["B2"]
-    title.value = "OAG — SISTEMA DE AUDITORÍAS COMERCIALES"
+    title.value = "OGSA — SISTEMA DE AUDITORÍAS COMERCIALES"
     title.font = Font(name="Calibri", bold=True, size=16, color="FFFFFF")
     title.alignment = Alignment(horizontal="left", vertical="center")
 
