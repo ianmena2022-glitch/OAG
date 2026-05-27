@@ -11,6 +11,7 @@
     "build": "electron-vite build",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
+    "release": "npm run build && electron-builder --win --publish always",
     "preview": "electron-vite preview"
   },
   "dependencies": {
