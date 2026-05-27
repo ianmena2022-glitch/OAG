@@ -310,13 +310,140 @@ def leer_comprobantes_emitidos_arca(path: str):
 
 
 def normalizar_monto(valor) -> float:
-    if valor is None or (isinstance(valor, float) and np.isnan(valor)):
+    """
+    Normalización inteligente de montos monetarios.
+
+    Detecta automáticamente el formato:
+    - Argentino  (punto=miles, coma=decimal): 1.234,56  → 1234.56
+    - Internacional (coma=miles, punto=decimal): 1,234.56 → 1234.56
+    - Sin separadores:  1234.56 o 1234,56  →  1234.56
+    - Negativos: -1234.56 o (1234.56)  →  -1234.56
+    - Símbolos de moneda eliminados: $, U$S, USD, ARS
+
+    Para un solo punto con exactamente 3 dígitos tras él y ≤3 dígitos antes
+    (ej: 1.234, 12.345) se trata como separador de miles (formato argentino).
+    Cualquier otro único punto se trata como decimal (ej: 1234.56, 0.50).
+    """
+    if valor is None:
         return 0.0
+    if isinstance(valor, (int, float)):
+        v = float(valor)
+        return 0.0 if (v != v) else v   # nan check sin importar numpy
+
+    s = str(valor).strip()
+
+    # Eliminar símbolos de moneda y espacios
+    for sym in ("U$S", "USD", "ARS", "$", "%"):
+        s = s.replace(sym, "").strip()
+    if not s:
+        return 0.0
+
+    # Detectar negativo: -1234 o (1234)
+    negativo = False
+    if s.startswith("(") and s.endswith(")"):
+        s = s[1:-1].strip()
+        negativo = True
+    if s.startswith("-"):
+        s = s[1:].strip()
+        negativo = True
+
+    # Conservar solo dígitos, punto y coma
+    s = re.sub(r"[^\d.,]", "", s)
+    if not s or not any(c.isdigit() for c in s):
+        return 0.0
+
+    n_dots   = s.count(".")
+    n_commas = s.count(",")
+
+    if n_dots >= 1 and n_commas >= 1:
+        # Ambos presentes: el último es el separador decimal
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")   # AR: 1.234,56 → 1234.56
+        else:
+            s = s.replace(",", "")                      # US: 1,234.56 → 1234.56
+    elif n_dots > 1:
+        # Múltiples puntos = separadores de miles: 1.234.567 → 1234567
+        s = s.replace(".", "")
+    elif n_commas > 1:
+        # Múltiples comas = separadores de miles: 1,234,567 → 1234567
+        s = s.replace(",", "")
+    elif n_dots == 1:
+        idx    = s.index(".")
+        before = s[:idx]
+        after  = s[idx + 1:]
+        if len(after) == 3 and 1 <= len(before) <= 3:
+            # Patrón X.YYY con pocos dígitos antes → miles AR: 1.234 → 1234
+            s = s.replace(".", "")
+        # else: decimal estándar: 1234.56 queda igual
+    elif n_commas == 1:
+        # Una sola coma → decimal argentino: 1234,56 → 1234.56
+        s = s.replace(",", ".")
+
     try:
-        s = str(valor).replace("$", "").replace(".", "").replace(",", ".").strip()
-        return float(s)
+        result = float(s)
     except ValueError:
         return 0.0
+
+    return -result if negativo else result
+
+
+# ── Filtro universal de filas basura en bajadas de ERP ─────────────────────────
+
+# Palabras que indican que una fila es un totalizador/resumen, no un comprobante real
+_RESUMEN_KEYWORDS = frozenset([
+    "total", "subtotal", "sub total", "gran total", "grand total",
+    "suma", "total general", "total comprobante", "total periodo",
+    "totales", "suma total", "resumen", "acumulado",
+])
+
+# Prefijos en el campo cliente que delatan filas de descripción de producto
+_PRODUCTO_PREFIJOS = (
+    "producto:", "artículo:", "articulo:", "item:", "descripcion:",
+    "descripción:", "detalle:", "referencia:",
+)
+
+# Umbral de monto: ninguna factura de un DS debería superar USD 50 M
+# (atrapa totales acumulados sin separadores como 1190034980620155)
+_MONTO_USD_MAX = 50_000_000
+
+
+def _es_fila_basura_gestion(
+    numero_raw: str,
+    numero_normalizado: str,
+    cliente_raw: str,
+    monto_usd: float,
+) -> bool:
+    """
+    Detecta filas que NO son comprobantes reales en bajadas de ERP.
+    Retorna True si la fila debe ser omitida.
+
+    Causas universales de filas basura:
+    1. Número normalizado todo ceros → fila sin comprobante identificable
+    2. Texto de totalizador en número o cliente ("Total", "Gran Total", etc.)
+    3. Filas de descripción de producto intercaladas por algunos ERP
+    4. Monto absurdamente alto → total acumulado leído sin separadores de miles
+    """
+    numero_lower  = str(numero_raw or "").lower().strip()
+    cliente_lower = str(cliente_raw or "").lower().strip()
+
+    # 1. Número vacío o todo ceros
+    if numero_normalizado in ("00000-00000000", ""):
+        return True
+
+    # 2. Palabra de resumen en número o en cliente
+    for text in (numero_lower, cliente_lower):
+        if any(k in text for k in _RESUMEN_KEYWORDS):
+            return True
+
+    # 3. Fila de descripción de producto (ERP que mezcla con comprobantes)
+    if any(cliente_lower.startswith(p) for p in _PRODUCTO_PREFIJOS):
+        return True
+
+    # 4. Monto astronómico → captado por total acumulado / error de formato
+    if abs(monto_usd) > _MONTO_USD_MAX:
+        return True
+
+    return False
 
 
 def ejecutar_paso1(
@@ -540,11 +667,23 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
             else:
                 monto_usd = abs(monto_usd)
 
+            cliente_raw = str(row.get(col_cliente, "") if col_cliente else "")
+
+            # ── Filtro universal de filas basura ────────────────────────────
+            # Elimina: totalizadores, filas de producto, montos astronómicos
+            if _es_fila_basura_gestion(
+                numero_raw=str(numero_raw or ""),
+                numero_normalizado=numero,
+                cliente_raw=cliente_raw,
+                monto_usd=monto_usd,
+            ):
+                continue
+
             registros.append({
                 "tipo": tipo,
                 "numero": numero,
                 "fecha": fecha.strftime("%Y-%m-%d"),
-                "cliente": str(row.get(col_cliente, "") if col_cliente else ""),
+                "cliente": cliente_raw,
                 "cuit_cliente": str(row.get(col_cuit, "") if col_cuit else ""),
                 "moneda": moneda,
                 "monto_original": monto_original,
@@ -629,35 +768,53 @@ def _convertir_a_usd(monto_ars: float, moneda: str, tc_row: float, fecha, tc_map
 
 
 def _cruzar_comprobantes(gestion: list, arca: list) -> list:
-    """Cruza registros y retorna conciliación.
+    """
+    Cruza registros Gestión vs ARCA en tres pasos:
 
-    Si una key aparece N veces en cada lado, se generan N pares (no se pisan).
-    Si aparece más veces en un lado, los sobrantes quedan como SOLO_*.
+    Paso 1 — Match exacto por key "{tipo}-{PV}-{NUM}".
+              Si una key aparece N veces en cada lado se generan N pares.
+
+    Paso 2 — Fuzzy PV matching para registros de Gestión con PV=00000.
+              Ocurre cuando el ERP no exporta la columna de Punto de Venta:
+              Gestión genera key "FC-00000-00002154" y ARCA tiene "FC-00001-00002154".
+              Se intenta emparejar por (tipo, NUM) ignorando el PV faltante.
+
+    Paso 3 — Sobrantes sin match → SOLO_ARCA / SOLO_GESTION.
     """
     from collections import defaultdict
 
-    arca_groups = defaultdict(list)
+    # ── Índices principales ──────────────────────────────────────────────────
+    arca_groups    = defaultdict(list)
     gestion_groups = defaultdict(list)
     for r in arca:
         arca_groups[r["key"]].append(r)
     for r in gestion:
         gestion_groups[r["key"]].append(r)
 
-    conciliacion = []
-    all_keys = set(arca_groups.keys()) | set(gestion_groups.keys())
+    # Índice secundario ARCA: (tipo, num_only) → lista de registros
+    # num_only = la parte numérica tras el guion (los 8 dígitos del número)
+    arca_por_tipo_num = defaultdict(list)
+    for r in arca:
+        _, num_part = r["numero"].split("-", 1)
+        arca_por_tipo_num[(r["tipo"], num_part)].append(r)
 
+    conciliacion  = []
+    arca_usados   = set()   # id(r_arca) ya emparejados
+    gestion_usados = set()  # id(r_gest) ya emparejados
+
+    # ── Paso 1: Match exacto ─────────────────────────────────────────────────
+    all_keys = set(arca_groups.keys()) | set(gestion_groups.keys())
     for key in all_keys:
         a_list = arca_groups.get(key, [])
         g_list = gestion_groups.get(key, [])
-
-        # Emparejar uno-a-uno mientras haya en ambos
         n = min(len(a_list), len(g_list))
         for i in range(n):
             r_arca = a_list[i]
             r_gest = g_list[i]
             diff = round(r_gest["monto_usd"] - r_arca["monto_usd_arca"], 2)
-            tolerancia = 1.0
-            estado = "OK" if abs(diff) <= tolerancia else "DIFERENCIA"
+            estado = "OK" if abs(diff) <= 1.0 else "DIFERENCIA"
+            arca_usados.add(id(r_arca))
+            gestion_usados.add(id(r_gest))
             conciliacion.append({
                 "key": key,
                 "tipo": r_arca["tipo"],
@@ -670,10 +827,40 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
                 "estado": estado,
             })
 
-        # Sobrantes en ARCA → SOLO_ARCA
-        for r_arca in a_list[n:]:
+    # ── Paso 2: Fuzzy PV — Gestión con PV=00000 sin match exacto ────────────
+    for r_gest in gestion:
+        if id(r_gest) in gestion_usados:
+            continue
+        pv_part, num_part = r_gest["numero"].split("-", 1)
+        if pv_part != "00000":
+            continue  # tiene PV real → dejarlo para Paso 3 (SOLO_GESTION real)
+        candidatos = arca_por_tipo_num.get((r_gest["tipo"], num_part), [])
+        for r_arca in candidatos:
+            if id(r_arca) in arca_usados:
+                continue
+            # ¡Match por (tipo, num) ignorando PV faltante en Gestión!
+            diff = round(r_gest["monto_usd"] - r_arca["monto_usd_arca"], 2)
+            estado = "OK" if abs(diff) <= 1.0 else "DIFERENCIA"
+            arca_usados.add(id(r_arca))
+            gestion_usados.add(id(r_gest))
             conciliacion.append({
-                "key": key,
+                "key": r_arca["key"],      # key con PV correcto de ARCA
+                "tipo": r_arca["tipo"],
+                "numero": r_arca["numero"],
+                "fecha": r_arca["fecha"],
+                "cliente": r_gest.get("cliente", ""),
+                "monto_usd_arca": r_arca["monto_usd_arca"],
+                "monto_usd_gestion": r_gest["monto_usd"],
+                "diferencia_usd": diff,
+                "estado": estado,
+            })
+            break
+
+    # ── Paso 3: Sobrantes ────────────────────────────────────────────────────
+    for r_arca in arca:
+        if id(r_arca) not in arca_usados:
+            conciliacion.append({
+                "key": r_arca["key"],
                 "tipo": r_arca["tipo"],
                 "numero": r_arca["numero"],
                 "fecha": r_arca["fecha"],
@@ -684,10 +871,10 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
                 "estado": "SOLO_ARCA",
             })
 
-        # Sobrantes en Gestión → SOLO_GESTION
-        for r_gest in g_list[n:]:
+    for r_gest in gestion:
+        if id(r_gest) not in gestion_usados:
             conciliacion.append({
-                "key": key,
+                "key": r_gest["key"],
                 "tipo": r_gest["tipo"],
                 "numero": r_gest["numero"],
                 "fecha": r_gest["fecha"],
