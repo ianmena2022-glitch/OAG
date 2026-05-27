@@ -215,6 +215,14 @@ GESTION_SCHEMA = {
         "monto neto", "base imponible", "subtotal", "gravado",
         "neto sin iva", "importe sin iva", "sin iva",
         "neto", "imp neto", "base", "importe base",
+        "neto+nograv", "neto + nograv", "neto+no grav",
+    ],
+    # Columna explícita en USD (algunos ERP exportan total ARS y total USD por separado)
+    "monto_total_usd": [
+        "total u$s", "total usd", "total dolares", "total dólares",
+        "total en dolares", "total en dólares", "importe usd", "importe u$s",
+        "monto usd", "monto dólares", "usd", "u$s", "dolares total",
+        "dólares total", "total dol", "imp usd", "total $u",
     ],
 }
 
@@ -270,13 +278,14 @@ def leer_bajada_gestion(path: str):
     Lee bajada de gestión (formato altamente variable — distintos ERP por DS).
     Usa smart_parser con IA + extended thinking para detectar columnas.
     Retorna (df_raw, mapping, info_parser).
+    Las columnas críticas incluyen monto_total_usd como alternativa a monto_total.
     """
     resultado = parsear_excel(
         path=path,
         task_id="bajada_gestion",
         schema=GESTION_SCHEMA,
         excluir_si_contiene=GESTION_EXCLUSIONES,
-        columnas_criticas=["fecha", "numero_comprobante", "monto_total"],
+        columnas_criticas=["fecha", "numero_comprobante"],  # monto_total es opcional si hay monto_total_usd
     )
     print(f"[GESTION] método={resultado['metodo']} conf={resultado['confianza']:.2f} "
           f"mapping={resultado['mapping']} warnings={resultado['warnings']}")
@@ -334,7 +343,12 @@ def ejecutar_paso1(
     df_arca_raw, arca_mapping, arca_info = leer_comprobantes_emitidos_arca(path_emitidos)
 
     # 4. Procesar bajada de gestión usando el mapping detectado
-    registros_gestion = _procesar_gestion(df_gestion, tc_map, mapping=gestion_mapping)
+    # Si el título del reporte indica el tipo (ej: "LISTADO DE NOTAS DE CREDITO"), usarlo
+    metadata_gestion = gestion_info.get("metadata_reporte", {})
+    tipo_inferido = metadata_gestion.get("tipo_inferido")
+    registros_gestion = _procesar_gestion(
+        df_gestion, tc_map, mapping=gestion_mapping, tipo_inferido=tipo_inferido
+    )
 
     # 5. Procesar comprobantes ARCA
     registros_arca = _procesar_arca(df_arca_raw, tc_map, mapping=arca_mapping)
@@ -372,6 +386,9 @@ def ejecutar_paso1(
     # Diagnóstico estructurado de parseo por archivo
     parser_diagnostico = []
     if gestion_info:
+        gestion_warnings = list(gestion_info.get("warnings", []))
+        if tipo_inferido:
+            gestion_warnings.insert(0, f"Tipo inferido del título del reporte: todos los registros son {tipo_inferido}")
         parser_diagnostico.append({
             "archivo": "Bajada de Gestión (ERP)",
             "metodo": gestion_info["metodo"],
@@ -380,7 +397,9 @@ def ejecutar_paso1(
             "columnas_archivo": gestion_info.get("columnas_archivo", []),
             "columnas_faltantes": gestion_info.get("columnas_faltantes", []),
             "columnas_no_mapeadas": gestion_info.get("columnas_no_mapeadas", []),
-            "warnings": gestion_info.get("warnings", []),
+            "warnings": gestion_warnings,
+            "registros_procesados": len(registros_gestion),
+            "filas_en_archivo": len(df_gestion),
         })
     if arca_info:
         parser_diagnostico.append({
@@ -405,34 +424,73 @@ def ejecutar_paso1(
     }
 
 
-def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None) -> list:
+def _inferir_moneda_por_valor(montos: list) -> str:
+    """
+    Infiere si los montos están en ARS o USD basándose en los valores.
+    Lógica de mercado agroquímico argentino 2024-2025:
+    - Facturas en ARS: típicamente > 100.000 (con TC ~1000 ARS/USD)
+    - Facturas en USD: típicamente entre 100 y 500.000
+    - Si la mediana supera 100.000 → muy probablemente ARS
+    - Si la mediana es < 50.000 → probablemente USD
+    """
+    montos_validos = [m for m in montos if m and m > 0]
+    if not montos_validos:
+        return "ARS"
+    mediana = sorted(montos_validos)[len(montos_validos) // 2]
+    # Umbral: si la mediana > 100.000 → ARS (ningún producto agroquímico vale 100k USD)
+    return "ARS" if mediana > 100_000 else "USD"
+
+
+def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
+                      tipo_inferido: str = None) -> list:
     """
     Procesa la bajada de gestión usando el mapping detectado por smart_parser.
     El df tiene columnas con sus nombres ORIGINALES del ERP.
     El mapping indica qué columna original corresponde a cada campo estándar.
+
+    tipo_inferido: "NC" | "ND" | None — tipo forzado si se detectó en el título del reporte.
     """
     mapping = mapping or {}
 
-    col_tipo    = mapping.get("tipo_comprobante")
-    col_pv      = mapping.get("punto_venta")
-    col_num     = mapping.get("numero_comprobante")
-    col_fecha   = mapping.get("fecha")
-    col_cliente = mapping.get("cliente")
-    col_cuit    = mapping.get("cuit_cliente")
-    col_moneda  = mapping.get("moneda")
-    col_tc      = mapping.get("tipo_cambio")
-    col_total   = mapping.get("monto_total")
+    col_tipo      = mapping.get("tipo_comprobante")
+    col_pv        = mapping.get("punto_venta")
+    col_num       = mapping.get("numero_comprobante")
+    col_fecha     = mapping.get("fecha")
+    col_cliente   = mapping.get("cliente")
+    col_cuit      = mapping.get("cuit_cliente")
+    col_moneda    = mapping.get("moneda")
+    col_tc        = mapping.get("tipo_cambio")
+    col_total     = mapping.get("monto_total")
+    col_total_usd = mapping.get("monto_total_usd")  # columna explícita en USD
+
+    # Pre-calcular moneda inferida si no hay columna de moneda ni de total USD
+    moneda_global = None
+    if not col_moneda and not col_total_usd and col_total:
+        # Leer muestra de montos para inferir moneda por valor
+        muestra_montos = []
+        for _, row in df.head(50).iterrows():
+            m = normalizar_monto(row.get(col_total))
+            if m > 0:
+                muestra_montos.append(m)
+        moneda_global = _inferir_moneda_por_valor(muestra_montos)
+        print(f"[GESTION] Moneda inferida por valor (mediana de muestra): {moneda_global}")
 
     registros = []
     for _, row in df.iterrows():
         try:
-            # Fecha — columna crítica; si no se detectó, intentamos buscarla en el row
+            # Fecha — columna crítica
             fecha_raw = row.get(col_fecha) if col_fecha else None
             fecha = pd.to_datetime(fecha_raw, errors="coerce")
             if pd.isna(fecha):
                 continue
 
-            tipo = normalizar_tipo_comprobante(row.get(col_tipo) if col_tipo else None)
+            # Tipo de comprobante: prioridad → columna > título del reporte > FC por defecto
+            if col_tipo:
+                tipo = normalizar_tipo_comprobante(row.get(col_tipo))
+            elif tipo_inferido:
+                tipo = tipo_inferido
+            else:
+                tipo = "FC"
 
             numero_raw = row.get(col_num) if col_num else ""
             pv_raw = row.get(col_pv) if col_pv else None
@@ -442,11 +500,26 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None) -> l
             else:
                 numero = normalizar_numero_comprobante(valor_combinado=numero_raw)
 
-            moneda = str(row.get(col_moneda, "ARS") if col_moneda else "ARS").upper().strip() or "ARS"
-            tc = normalizar_monto(row.get(col_tc)) if col_tc else 0
-            monto_total = normalizar_monto(row.get(col_total) if col_total else 0)
-
-            monto_usd = _convertir_a_usd(monto_total, moneda, tc, fecha, tc_map)
+            # Monto USD: 3 estrategias en orden de preferencia
+            if col_total_usd:
+                # 1. Columna explícita en USD → usar directamente
+                monto_usd = normalizar_monto(row.get(col_total_usd))
+                monto_original = monto_usd
+                moneda = "USD"
+            elif col_total:
+                monto_original = normalizar_monto(row.get(col_total))
+                if col_moneda:
+                    # 2. Columna de moneda explícita
+                    moneda = str(row.get(col_moneda, "ARS")).upper().strip() or "ARS"
+                else:
+                    # 3. Moneda inferida por valor (pre-calculada)
+                    moneda = moneda_global or "ARS"
+                tc = normalizar_monto(row.get(col_tc)) if col_tc else 0
+                monto_usd = _convertir_a_usd(monto_original, moneda, tc, fecha, tc_map)
+            else:
+                monto_original = 0.0
+                monto_usd = 0.0
+                moneda = "ARS"
 
             # Signo por tipo de comprobante
             if tipo == "NC":
@@ -461,7 +534,7 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None) -> l
                 "cliente": str(row.get(col_cliente, "") if col_cliente else ""),
                 "cuit_cliente": str(row.get(col_cuit, "") if col_cuit else ""),
                 "moneda": moneda,
-                "monto_original": monto_total,
+                "monto_original": monto_original,
                 "monto_usd": round(monto_usd, 2),
                 "key": f"{tipo}-{numero}",
             })

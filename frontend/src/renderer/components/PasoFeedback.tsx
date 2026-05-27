@@ -24,6 +24,8 @@ interface ParserDiagnostico {
   columnas_faltantes?: string[]
   columnas_no_mapeadas?: string[]
   warnings?: string[]
+  registros_procesados?: number
+  filas_en_archivo?: number
 }
 
 interface Props {
@@ -84,6 +86,16 @@ function ParserDiagnosticoCard({ item }: { item: ParserDiagnostico }) {
           {!hayProblema && (
             <p className="text-xs text-green-800 mt-1">
               Todas las columnas detectadas correctamente
+            </p>
+          )}
+          {item.registros_procesados !== undefined && (
+            <p className={cn(
+              'text-xs mt-1 font-medium',
+              item.registros_procesados === 0 ? 'text-red-700' : 'text-oag-muted'
+            )}>
+              {item.registros_procesados === 0
+                ? `⚠ 0 registros procesados de ${item.filas_en_archivo ?? '?'} filas`
+                : `${item.registros_procesados} registros procesados de ${item.filas_en_archivo ?? '?'} filas`}
             </p>
           )}
         </div>

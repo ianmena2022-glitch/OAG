@@ -32,31 +32,97 @@ def _norm(s: str) -> str:
 
 # ─── Detección de header rows ──────────────────────────────────────────────────
 
-def detectar_header_row(path: str, max_skip: int = 8) -> int:
+def detectar_header_row(path: str, max_skip: int = 10) -> int:
     """
     Detecta cuántas filas saltar antes del verdadero encabezado.
-    Heurística: la fila con más celdas no-vacías y con texto alfabético.
+
+    Heurística mejorada que distingue entre:
+    - Filas de título (1-2 celdas largas, el resto vacío) → penalizar
+    - Filas de datos (mix de fechas, números, texto largo) → penalizar
+    - Filas de headers reales (muchas celdas cortas con texto descriptivo) → premiar
     """
     best_row = 0
     best_score = -1
     for skip in range(max_skip):
         try:
-            df = pd.read_excel(path, header=skip, dtype=str, nrows=2)
+            df = pd.read_excel(path, header=skip, dtype=str, nrows=3)
         except Exception:
             continue
         cols = list(df.columns)
-        # Score: columnas no-anónimas con texto
-        score = 0
+        total_cols = len(cols)
+        if total_cols < 2:
+            continue
+
+        named_cols = []
         for c in cols:
             cs = str(c).strip()
             if cs and not cs.lower().startswith("unnamed") and not cs.replace(".", "").isdigit():
-                # Bonificar si tiene letras
-                if any(ch.isalpha() for ch in cs):
-                    score += 1
+                named_cols.append(cs)
+
+        n_named = len(named_cols)
+        if n_named == 0:
+            continue
+
+        # Spread: qué fracción de columnas tienen nombre real (headers reales tienen alta fracción)
+        spread = n_named / total_cols
+
+        # Longitud promedio de los nombres (headers son cortos: "Fecha", "Total"; títulos son largos)
+        avg_len = sum(len(c) for c in named_cols) / n_named
+        # Penalizar nombres muy largos (>30 chars típico de título/razón social)
+        length_penalty = max(0, (avg_len - 20) / 20)  # 0 si avg<=20, >0 si más largo
+
+        # Diversidad: headers reales mezclan diferentes "tipos" de palabras
+        # Una fila de título suele tener 1 columna con mucho texto
+        solo_una = 1.0 if n_named == 1 else 0.0
+
+        score = spread * 10 - length_penalty * 3 - solo_una * 5 + n_named * 0.5
+
         if score > best_score:
             best_score = score
             best_row = skip
+
     return best_row
+
+
+def detectar_metadata_reporte(path: str, header_row: int) -> dict:
+    """
+    Lee las filas ANTES del header para extraer metadatos del reporte:
+    - titulo: título del reporte (ej: "LISTADO DE NOTAS DE CREDITO")
+    - tipo_inferido: "NC" | "ND" | "FC" | None (inferido del título)
+    - empresa: nombre de empresa si aparece
+    """
+    metadata = {"titulo": None, "tipo_inferido": None, "empresa": None}
+    if header_row == 0:
+        return metadata
+
+    try:
+        df_pre = pd.read_excel(path, header=None, dtype=str, nrows=header_row)
+    except Exception:
+        return metadata
+
+    # Juntar todo el texto de las filas previas
+    textos = []
+    for _, row in df_pre.iterrows():
+        for val in row:
+            s = str(val).strip()
+            if s and s.lower() not in ("nan", "none", ""):
+                textos.append(s)
+
+    texto_completo = " ".join(textos).upper()
+    metadata["titulo"] = " | ".join(textos[:5]) if textos else None
+
+    # Inferir tipo de comprobante del título
+    NC_KEYWORDS = ["NOTA DE CREDITO", "NOTA DE CRÉDITO", "NOTAS DE CREDITO",
+                   "NOTAS DE CRÉDITO", "N. CREDITO", "N. CRÉDITO", "N/C", " NC "]
+    ND_KEYWORDS = ["NOTA DE DEBITO", "NOTA DE DÉBITO", "NOTAS DE DEBITO",
+                   "NOTAS DE DÉBITO", "N. DEBITO", "N. DÉBITO", "N/D", " ND "]
+
+    if any(kw in texto_completo for kw in NC_KEYWORDS):
+        metadata["tipo_inferido"] = "NC"
+    elif any(kw in texto_completo for kw in ND_KEYWORDS):
+        metadata["tipo_inferido"] = "ND"
+
+    return metadata
 
 
 # ─── Detección de columnas por keywords ────────────────────────────────────────
@@ -215,13 +281,18 @@ def parsear_excel(
             df = df.dropna(how="all").dropna(axis=1, how="all")
             return {**cached, "df": df, "metodo": "cache"}
 
-    # 2. Detectar header
+    # 2. Detectar header y metadatos del reporte (título, tipo inferido)
     header_row = detectar_header_row(path)
+    metadata = detectar_metadata_reporte(path, header_row)
     df = pd.read_excel(path, header=header_row, dtype=str)
     df = df.dropna(how="all").dropna(axis=1, how="all")
     cols = [str(c) for c in df.columns]
 
     warnings = []
+    if metadata.get("titulo"):
+        warnings.append(f"Título del reporte detectado: '{metadata['titulo']}'")
+    if metadata.get("tipo_inferido"):
+        warnings.append(f"Tipo de comprobante inferido del título: {metadata['tipo_inferido']}")
 
     # 3. Intento 1: keywords
     mapping = detectar_por_keywords(cols, schema, excluir_si_contiene)
@@ -284,6 +355,7 @@ def parsear_excel(
         "columnas_no_mapeadas": columnas_no_mapeadas,
         "columnas_faltantes": columnas_faltantes,
         "task_id": task_id,
+        "metadata_reporte": metadata,  # título, tipo_inferido, empresa
     }
 
     # Persistir en cache (sin el DataFrame)
