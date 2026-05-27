@@ -444,7 +444,7 @@ LANDING_HTML = """<!DOCTYPE html>
   </section>
 
   <footer>
-    OGSA Auditores &copy; 2026 &nbsp;·&nbsp; oag.up.railway.app &nbsp;·&nbsp; Confidencial
+    OGSA Auditores &copy; 2026 &nbsp;·&nbsp; ogsa.up.railway.app &nbsp;·&nbsp; Confidencial
   </footer>
 
 </body>
