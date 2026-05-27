@@ -57,7 +57,8 @@
       "repo": "OAG"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "artifactName": "ogsa-auditoria-setup-${version}.exe"
     },
     "nsis": {
       "oneClick": false,
