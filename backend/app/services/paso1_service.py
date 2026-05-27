@@ -466,13 +466,15 @@ def _deduplicar_gestion(registros: list) -> list:
       - NC-00000-XXXXXXXX  (del archivo Facturas, sin columna PV)
       - NC-00001-XXXXXXXX  (del archivo NC, con PV real)
 
-    Regla universal:
-    - Si hay dos registros con igual (tipo, num_part) donde UNO tiene PV=00000
-      y OTRO tiene PV real → son el mismo comprobante → conservar el de PV real.
-    - Si ambos tienen PV real pero distinto → son comprobantes genuinamente
-      diferentes (mismo número en distintos puntos de venta) → mantener ambos.
-    - Si ambos tienen PV=00000 → duplicado puro (mismo archivo cargado dos veces
-      u otro motivo) → conservar solo uno.
+    Regla: solo se deduplica cuando coexisten PV=00000 Y PV real para el mismo
+    (tipo, num_part). En ese caso el PV=00000 es el mismo comprobante visto desde
+    un archivo sin columna PV → se descarta y se conserva el de PV real.
+
+    Casos que NO se tocan:
+    - PVs reales distintos (00001 y 00002, mismo número): comprobantes genuinamente
+      diferentes → se mantienen ambos.
+    - Todos PV=00000: pueden ser distintos PVs sin columna, o líneas de producto
+      del mismo comprobante → se dejan pasar, _agregar_por_comprobante los une.
     """
     from collections import defaultdict
 
@@ -493,15 +495,15 @@ def _deduplicar_gestion(registros: list) -> list:
         sin_pv      = [(pv, r) for pv, r in entries if pv == "00000"]
 
         if con_pv_real and sin_pv:
-            # Mismo comprobante desde archivo con y sin PV → conservar PV real
+            # Coexisten versiones con PV real y sin PV:
+            # → las sin PV son el mismo comprobante visto desde un archivo sin columna PV
+            # → conservar solo las de PV real
             resultado.extend(r for _, r in con_pv_real)
             eliminados += len(sin_pv)
-        elif not con_pv_real:
-            # Todos PV=00000 → duplicado puro → conservar uno
-            resultado.append(sin_pv[0][1])
-            eliminados += len(sin_pv) - 1
         else:
-            # Todos con PV real pero distintos → comprobantes genuinamente distintos
+            # Todos PV real (distintos PVs) → comprobantes genuinamente distintos → mantener todos
+            # Todos PV=00000 → pueden ser PVs distintos sin columna, o líneas del mismo
+            #   comprobante → NO deduplicar, _agregar_por_comprobante los maneja
             resultado.extend(r for _, r in entries)
 
     if eliminados:
