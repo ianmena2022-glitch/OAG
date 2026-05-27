@@ -840,13 +840,19 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
     # intentar match por (tipo, NUM) ignorando el PV.
     # Si el PV SÍ existe en ARCA pero no hubo match exacto → SOLO_GESTION genuino.
 
-    arca_pvs = {r["numero"].split("-", 1)[0] for r in arca}
+    # PVs reales de ARCA separados por tipo (FC, NC, ND)
+    # Así un PV=3 de FC no bloquea el fuzzy de NC donde "0003" es código AFIP
+    from collections import defaultdict as _dd
+    arca_pvs_por_tipo: dict = _dd(set)
+    for r in arca:
+        pv, _ = r["numero"].split("-", 1)
+        arca_pvs_por_tipo[r["tipo"]].add(pv)
 
     def _aplicar_fuzzy(r_gest: dict) -> bool:
         """Intenta match fuzzy para r_gest. Retorna True si matcheó."""
         pv_part, num_part = r_gest["numero"].split("-", 1)
-        # Solo aplicar si el PV es desconocido (00000) o extraño (no existe en ARCA)
-        if pv_part != "00000" and pv_part in arca_pvs:
+        # Solo aplicar si el PV es desconocido (00000) o no existe en ARCA para ese tipo
+        if pv_part != "00000" and pv_part in arca_pvs_por_tipo[r_gest["tipo"]]:
             return False
         candidatos = arca_por_tipo_num.get((r_gest["tipo"], num_part), [])
         for r_arca in candidatos:
