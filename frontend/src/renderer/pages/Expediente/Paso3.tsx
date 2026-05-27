@@ -7,6 +7,7 @@ import FileUpload from '../../components/FileUpload'
 import DataTable, { Column } from '../../components/DataTable'
 import { Play, Loader, Info } from 'lucide-react'
 import { cn } from '../../lib/utils'
+import PasoFeedback from '../../components/PasoFeedback'
 
 interface Props { expediente: any }
 
@@ -111,6 +112,8 @@ export default function Paso3({ expediente }: Props) {
 
       {resultado && (
         <>
+          <PasoFeedback validacion={resultado.validacion} parserDiagnostico={resultado.parser_diagnostico} />
+
           <div className="grid grid-cols-4 gap-3">
             {[
               { label: 'Total líneas', value: resumen.total_lineas, color: '' },

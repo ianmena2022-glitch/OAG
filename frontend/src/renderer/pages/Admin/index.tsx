@@ -3,10 +3,115 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { adminAPI } from '../../lib/api'
 import { useNotificationStore } from '../../store'
 import FileUpload from '../../components/FileUpload'
-import { Users, Database, BookOpen, Loader, CheckCircle, XCircle, Plus } from 'lucide-react'
+import { Users, Database, BookOpen, Loader, CheckCircle, XCircle, Plus, Sparkles, AlertTriangle } from 'lucide-react'
 import { cn } from '../../lib/utils'
 
 type Tab = 'usuarios' | 'maestro' | 'glosario'
+
+interface ParserInfo {
+  count?: number
+  mapping?: Record<string, string | null>
+  metodo_deteccion?: 'keywords' | 'ia' | 'ia_thinking' | 'cache'
+  confianza?: number
+  warnings?: string[]
+  columnas_archivo?: string[]
+  columnas_faltantes?: string[]
+  columnas_no_mapeadas?: string[]
+}
+
+function ParserInfoCard({ info }: { info: ParserInfo }) {
+  const metodo = info.metodo_deteccion || 'keywords'
+  const confianza = info.confianza ?? 1
+  const warnings = info.warnings || []
+  const mapping = info.mapping || {}
+  const columnasArchivo = info.columnas_archivo || []
+  const columnasFaltantes = info.columnas_faltantes || []
+
+  const metodoLabel = {
+    keywords: 'Detección automática (keywords)',
+    ia: 'IA (Claude)',
+    ia_thinking: 'IA con razonamiento profundo',
+    cache: 'Cache (archivo ya procesado antes)',
+  }[metodo]
+
+  const usaIA = metodo === 'ia' || metodo === 'ia_thinking'
+  const lowConf = confianza < 0.85
+  const tieneFaltantes = columnasFaltantes.length > 0
+  const hayProblema = tieneFaltantes || lowConf || warnings.length > 0
+
+  return (
+    <div className={cn(
+      'mt-4 max-w-3xl rounded border p-3 space-y-3',
+      hayProblema ? 'border-yellow-300 bg-yellow-50/60' : 'border-green-200 bg-green-50/40'
+    )}>
+      <div className="flex items-center gap-2">
+        {usaIA ? <Sparkles size={12} className="text-oag-blue" /> :
+         hayProblema ? <AlertTriangle size={12} className="text-yellow-700" /> :
+         <CheckCircle size={12} className="text-oag-success" />}
+        <p className="text-xs font-semibold text-oag-text">
+          {metodoLabel} · confianza {Math.round(confianza * 100)}%
+        </p>
+      </div>
+
+      {tieneFaltantes && (
+        <p className="text-xs text-red-700 font-medium">
+          ⚠ No se detectaron las columnas: {columnasFaltantes.join(', ')}
+        </p>
+      )}
+
+      <div>
+        <p className="text-xs font-medium text-oag-text mb-1">Mapeo detectado:</p>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs bg-white rounded border border-oag-border p-2">
+          {Object.entries(mapping).map(([std, orig]) => (
+            <div key={std} className="flex gap-2">
+              <span className="text-oag-muted min-w-[130px]">{std}:</span>
+              <span className={orig ? 'font-medium text-oag-text truncate' : 'italic text-red-700'}>
+                {orig || '(no detectada)'}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {columnasArchivo.length > 0 && (
+        <div>
+          <p className="text-xs font-medium text-oag-text mb-1">
+            Columnas reales del archivo ({columnasArchivo.length}):
+          </p>
+          <div className="text-xs bg-white rounded border border-oag-border p-2 max-h-28 overflow-y-auto">
+            {columnasArchivo.map((c, i) => (
+              <span
+                key={i}
+                className={cn(
+                  'inline-block mr-1.5 mb-1 px-1.5 py-0.5 rounded text-xs',
+                  Object.values(mapping).includes(c)
+                    ? 'bg-green-100 text-green-900 border border-green-300'
+                    : 'bg-oag-light text-oag-muted border border-oag-border'
+                )}
+              >
+                {c}
+              </span>
+            ))}
+          </div>
+          <p className="text-xs text-oag-muted mt-1 italic">Verde = usada · Gris = no se usó</p>
+        </div>
+      )}
+
+      {warnings.length > 0 && (
+        <ul className="text-xs text-yellow-800 space-y-0.5 bg-white rounded border border-yellow-200 p-2">
+          {warnings.map((w, i) => <li key={i}>• {w}</li>)}
+        </ul>
+      )}
+
+      {tieneFaltantes && (
+        <div className="text-xs text-oag-muted bg-blue-50/50 border border-blue-200 rounded p-2">
+          <strong className="text-oag-text">¿Qué hacer?</strong> Renombrá las columnas del Excel a nombres
+          más claros (ej: para el glosario usá "nombre_original" y "nombre_estandar") y volvé a subir el archivo.
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>('usuarios')
@@ -175,6 +280,7 @@ function TabMaestro() {
   const qc = useQueryClient()
   const { push } = useNotificationStore()
   const [uploading, setUploading] = useState(false)
+  const [uploadInfo, setUploadInfo] = useState<any>(null)
 
   const { data: maestro, isLoading } = useQuery({
     queryKey: ['maestro-syngenta'],
@@ -184,9 +290,10 @@ function TabMaestro() {
   const handleUpload = async (file: File) => {
     setUploading(true)
     try {
-      await adminAPI.cargarMaestro(file)
+      const res = await adminAPI.cargarMaestro(file)
+      setUploadInfo(res.data)
       qc.invalidateQueries({ queryKey: ['maestro-syngenta'] })
-      push('success', 'Maestro de productos Syngenta actualizado')
+      push('success', res.data.message || 'Maestro de productos Syngenta actualizado')
     } catch (err: any) {
       push('error', err.response?.data?.detail || 'Error al cargar maestro')
     } finally {
@@ -211,6 +318,9 @@ function TabMaestro() {
             uploadedName={maestro?.length > 0 ? `${maestro.length} productos cargados` : undefined}
           />
         </div>
+        {uploadInfo && (
+          <ParserInfoCard info={uploadInfo} />
+        )}
       </div>
 
       {isLoading ? (
@@ -256,11 +366,14 @@ function TabGlosario() {
   const total = glosario?.total ?? 0
   const items = glosario?.items ?? []
 
+  const [uploadInfo, setUploadInfo] = useState<any>(null)
+
   const handleUpload = async (file: File) => {
     setUploading(true)
     try {
       const res = await adminAPI.cargarGlosario(file)
       setUploadedCount(res.data.count)
+      setUploadInfo(res.data)
       push('success', res.data.message)
     } catch (err: any) {
       push('error', err.response?.data?.detail || 'Error al cargar glosario')
@@ -288,6 +401,9 @@ function TabGlosario() {
             uploadedName={displayTotal > 0 ? `${displayTotal} entradas cargadas` : undefined}
           />
         </div>
+        {uploadInfo && (
+          <ParserInfoCard info={uploadInfo} />
+        )}
       </div>
 
       {isLoading ? (

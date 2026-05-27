@@ -4,6 +4,7 @@ import { pasosAPI } from '../../lib/api'
 import { useNotificationStore } from '../../store'
 import { downloadBlob } from '../../lib/utils'
 import { Play, Download, Loader, FileSpreadsheet, CheckCircle, BookOpen } from 'lucide-react'
+import PasoFeedback from '../../components/PasoFeedback'
 
 interface Props { expediente: any }
 
@@ -106,6 +107,10 @@ export default function Paso6({ expediente }: Props) {
           </button>
         )}
       </div>
+
+      {resultado?.validacion && (
+        <PasoFeedback validacion={resultado.validacion} />
+      )}
 
       {totales && (
         <div className="card p-5">

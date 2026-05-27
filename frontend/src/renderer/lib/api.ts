@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 // URL del backend
-const BACKEND_URL = localStorage.getItem('oag_backend_url') || 'https://oag.up.railway.app'
+const BACKEND_URL = localStorage.getItem('oag_backend_url') || 'https://ogsa.up.railway.app'
 
 export const api = axios.create({
   baseURL: BACKEND_URL,

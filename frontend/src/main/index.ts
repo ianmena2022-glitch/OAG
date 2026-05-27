@@ -121,5 +121,5 @@ app.on('window-all-closed', () => {
 
 // IPC: obtener URL del backend
 ipcMain.handle('get-backend-url', () => {
-  return process.env['BACKEND_URL'] || 'https://oag.up.railway.app'
+  return process.env['BACKEND_URL'] || 'https://ogsa.up.railway.app'
 })

@@ -6,6 +6,7 @@ import { formatUSD } from '../../lib/utils'
 import FileUpload from '../../components/FileUpload'
 import DataTable, { Column } from '../../components/DataTable'
 import { Play, Loader, Info } from 'lucide-react'
+import PasoFeedback from '../../components/PasoFeedback'
 
 interface Props { expediente: any }
 
@@ -105,6 +106,8 @@ export default function Paso4({ expediente }: Props) {
 
       {resultado && (
         <>
+          <PasoFeedback validacion={resultado.validacion} parserDiagnostico={resultado.parser_diagnostico} />
+
           <div className="grid grid-cols-2 gap-3">
             <div className="card p-3">
               <p className="text-xs text-oag-muted">Total Compras (USD)</p>

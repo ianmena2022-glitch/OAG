@@ -17,6 +17,7 @@ from ...models.expediente import (
 )
 from ...services import paso1_service, paso2_service, paso3_service
 from ...services import paso4_service, paso5_service, paso6_service
+from ...ai.validator import validar_paso
 
 router = APIRouter(prefix="/expedientes/{exp_id}/pasos", tags=["pasos"])
 
@@ -96,12 +97,17 @@ def ejecutar_paso1(
     _save_resultado(db, exp_id, 1, "resumen", datos=resultado["resumen"])
     _save_resultado(db, exp_id, 1, "bajada_normalizada",
                     archivo_path=resultado["bajada_normalizada_path"])
+    _save_resultado(db, exp_id, 1, "validacion", datos=resultado.get("validacion"))
+    _save_resultado(db, exp_id, 1, "parser_diagnostico",
+                    datos={"items": resultado.get("parser_diagnostico", [])})
     _marcar_paso_completado(exp, 1, db)
 
     return {
         "resumen": resultado["resumen"],
         "conciliacion": resultado["conciliacion"][:500],  # Limitar para respuesta API
         "total_registros": len(resultado["conciliacion"]),
+        "validacion": resultado.get("validacion"),
+        "parser_diagnostico": resultado.get("parser_diagnostico", []),
     }
 
 
@@ -178,6 +184,10 @@ def ejecutar_paso2(
     _save_resultado(db, exp_id, 2, "tabla_apertura", datos=resultado["tabla_apertura"])
     _save_resultado(db, exp_id, 2, "agroquimicos", archivo_path=resultado["agroquimicos_path"])
     _save_resultado(db, exp_id, 2, "totales", datos=resultado["totales"])
+
+    # Validación IA
+    validacion = validar_paso(2, resultado["totales"], muestra=resultado["ranking_clientes"][:5])
+    _save_resultado(db, exp_id, 2, "validacion", datos=validacion)
     _marcar_paso_completado(exp, 2, db)
 
     return {
@@ -186,6 +196,7 @@ def ejecutar_paso2(
         "ranking_productos_top10": resultado["ranking_productos"][:10],
         "muestreo": resultado["muestreo"],
         "tabla_apertura": resultado["tabla_apertura"][:50],
+        "validacion": validacion,
     }
 
 
@@ -239,9 +250,15 @@ def ejecutar_paso3(
 
     _save_resultado(db, exp_id, 3, "conciliacion", datos=resultado["conciliacion"])
     _save_resultado(db, exp_id, 3, "resumen", datos=resultado["resumen"])
+    _save_resultado(db, exp_id, 3, "parser_diagnostico",
+                    datos={"items": resultado.get("parser_diagnostico", [])})
+
+    # Validación IA
+    validacion = validar_paso(3, resultado["resumen"], muestra=resultado["conciliacion"][:5])
+    _save_resultado(db, exp_id, 3, "validacion", datos=validacion)
     _marcar_paso_completado(exp, 3, db)
 
-    return resultado
+    return {**resultado, "validacion": validacion}
 
 
 @router.get("/3/resultado")
@@ -293,11 +310,19 @@ def ejecutar_paso4(
 
     _save_resultado(db, exp_id, 4, "resumen", datos=resultado["resumen"])
     _save_resultado(db, exp_id, 4, "totales", datos=resultado["totales"])
+    _save_resultado(db, exp_id, 4, "parser_diagnostico",
+                    datos={"items": resultado.get("parser_diagnostico", [])})
+
+    # Validación IA
+    validacion = validar_paso(4, resultado["totales"], muestra=resultado["resumen"][:5])
+    _save_resultado(db, exp_id, 4, "validacion", datos=validacion)
     _marcar_paso_completado(exp, 4, db)
 
     return {
         "totales": resultado["totales"],
         "resumen_top20": resultado["resumen"][:20],
+        "parser_diagnostico": resultado.get("parser_diagnostico", []),
+        "validacion": validacion,
     }
 
 
@@ -361,9 +386,13 @@ def ejecutar_paso5(
 
     _save_resultado(db, exp_id, 5, "informe", archivo_path=resultado["excel_path"])
     _save_resultado(db, exp_id, 5, "totales", datos=resultado["totales"])
+
+    # Validación IA
+    validacion = validar_paso(5, resultado["totales"])
+    _save_resultado(db, exp_id, 5, "validacion", datos=validacion)
     _marcar_paso_completado(exp, 5, db)
 
-    return resultado
+    return {**resultado, "validacion": validacion}
 
 
 @router.get("/5/descargar")
@@ -431,9 +460,13 @@ def ejecutar_paso6(
 
     _save_resultado(db, exp_id, 6, "informe", archivo_path=resultado["excel_path"])
     _save_resultado(db, exp_id, 6, "totales", datos=resultado["totales"])
+
+    # Validación IA
+    validacion = validar_paso(6, resultado["totales"])
+    _save_resultado(db, exp_id, 6, "validacion", datos=validacion)
     _marcar_paso_completado(exp, 6, db)
 
-    return resultado
+    return {**resultado, "validacion": validacion}
 
 
 @router.get("/6/descargar")

@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 
 from ..ai.normalizador import normalizar_columnas, aplicar_normalizacion
+from ..ai.smart_parser import parsear_excel
 from ..core.config import settings
 
 # Tipos de comprobante reconocidos
@@ -112,35 +113,60 @@ def obtener_tipo_cambio_fecha(tc_map: dict, fecha: date, moneda: str) -> float:
     return 0  # NUNCA 1.0 — eso inflaba los totales x10
 
 
+TC_SCHEMA = {
+    "fecha": ["fecha", "date", "dia", "día", "fec"],
+    "cotizacion": ["cotizacion", "cotización", "cambio", "tc", "t/c", "dolar", "dólar",
+                   "usd", "valor", "precio", "venta", "tipo de cambio"],
+}
+
+ARCA_SCHEMA = {
+    "tipo_comprobante": ["tipo de comprobante", "tipo comprobante", "tipo"],
+    "punto_venta": ["punto de venta", "pto. vta", "pto vta", "pto venta", "pv"],
+    "numero_comprobante": ["número desde", "numero desde", "nro desde",
+                            "nro comprobante", "nro. comprobante", "número comprobante",
+                            "comprobante", "factura", "número", "numero", "nro"],
+    "fecha": ["fecha de emisión", "fecha emisión", "fecha emision",
+              "fecha comprobante", "fecha"],
+    "moneda": ["moneda", "mon"],
+    "tipo_cambio": ["tipo de cambio", "t/c", "tc", "cambio"],
+    "monto_total": ["importe total", "imp. total", "imp total", "total"],
+}
+
+ARCA_EXCLUSIONES = {
+    # No queremos que estos campos se confundan con datos del receptor
+    "numero_comprobante": ["cuit", "receptor", "comprador", "doc receptor", "denominacion", "denominación"],
+    "tipo_comprobante": ["cuit", "receptor", "doc receptor", "doc. receptor"],
+    "punto_venta": ["cuit", "receptor"],
+    "fecha": ["vencimiento", "vto"],
+}
+
+
 def leer_tipos_cambio(path: str) -> dict:
-    """Lee archivo de tipos de cambio. Retorna dict {fecha_str: cotizacion}"""
-    df = pd.read_excel(path)
+    """Lee archivo de tipos de cambio usando smart_parser. Retorna {fecha_str: cotizacion}"""
+    resultado = parsear_excel(
+        path=path,
+        task_id="tipos_cambio",
+        schema=TC_SCHEMA,
+        columnas_criticas=["fecha", "cotizacion"],
+    )
+    df = resultado["df"]
+    mapping = resultado["mapping"]
+    col_fecha = mapping.get("fecha") or df.columns[0]
+    col_tc = mapping.get("cotizacion") or (df.columns[1] if len(df.columns) > 1 else df.columns[0])
+
+    print(f"[TC] método={resultado['metodo']} conf={resultado['confianza']:.2f} "
+          f"fecha={col_fecha} tc={col_tc} warnings={resultado['warnings']}")
+
     tc_map = {}
-
-    # Detectar columnas de fecha y cotización
-    col_fecha = None
-    col_tc = None
-    for col in df.columns:
-        col_l = str(col).lower()
-        if any(k in col_l for k in ["fecha", "date"]):
-            col_fecha = col
-        if any(k in col_l for k in ["cotiz", "tc", "cambio", "dolar", "usd", "valor"]):
-            col_tc = col
-
-    if not col_fecha or not col_tc:
-        # Asumir primera col = fecha, segunda = cotización
-        cols = list(df.columns)
-        col_fecha = cols[0]
-        col_tc = cols[1]
-
     for _, row in df.iterrows():
         try:
             fecha = pd.to_datetime(row[col_fecha])
-            tc = float(row[col_tc])
+            tc = normalizar_monto(row[col_tc])
+            if tc <= 0:
+                continue
             tc_map[fecha.strftime("%Y-%m-%d")] = tc
         except (ValueError, TypeError):
             continue
-
     return tc_map
 
 
@@ -168,20 +194,21 @@ def leer_bajada_gestion(path: str) -> Tuple[pd.DataFrame, dict]:
     return df_norm, mapping
 
 
-def leer_comprobantes_emitidos_arca(path: str) -> pd.DataFrame:
+def leer_comprobantes_emitidos_arca(path: str):
     """
-    Lee archivo de comprobantes emitidos de ARCA (formato relativamente fijo).
+    Lee archivo de comprobantes emitidos de ARCA usando smart_parser.
+    Retorna (df, mapping, info_parser).
     """
-    for skip in range(5):
-        try:
-            df = pd.read_excel(path, header=skip, dtype=str)
-            df = df.dropna(how="all").dropna(axis=1, how="all")
-            if len(df.columns) >= 5:
-                break
-        except Exception:
-            continue
-
-    return df
+    resultado = parsear_excel(
+        path=path,
+        task_id="arca_emitidos",
+        schema=ARCA_SCHEMA,
+        excluir_si_contiene=ARCA_EXCLUSIONES,
+        columnas_criticas=["tipo_comprobante", "numero_comprobante", "fecha", "monto_total"],
+    )
+    print(f"[ARCA] método={resultado['metodo']} conf={resultado['confianza']:.2f} "
+          f"mapping={resultado['mapping']} warnings={resultado['warnings']}")
+    return resultado["df"], resultado["mapping"], resultado
 
 
 def normalizar_monto(valor) -> float:
@@ -214,14 +241,14 @@ def ejecutar_paso1(
     # 2. Cargar y normalizar bajada de gestión
     df_gestion, mapping = leer_bajada_gestion(path_bajada)
 
-    # 3. Cargar comprobantes ARCA
-    df_arca_raw = leer_comprobantes_emitidos_arca(path_emitidos)
+    # 3. Cargar comprobantes ARCA (smart_parser)
+    df_arca_raw, arca_mapping, arca_info = leer_comprobantes_emitidos_arca(path_emitidos)
 
     # 4. Procesar bajada de gestión
     registros_gestion = _procesar_gestion(df_gestion, tc_map)
 
     # 5. Procesar comprobantes ARCA
-    registros_arca = _procesar_arca(df_arca_raw, tc_map)
+    registros_arca = _procesar_arca(df_arca_raw, tc_map, mapping=arca_mapping)
 
     # 6. Cruce / Conciliación
     conciliacion = _cruzar_comprobantes(registros_gestion, registros_arca)
@@ -249,11 +276,32 @@ def ejecutar_paso1(
         "monto_total_gestion_usd": sum(r["monto_usd"] for r in registros_gestion),
     }
 
+    # Validación con IA
+    from ..ai.validator import validar_paso
+    validacion = validar_paso(1, resumen, muestra=conciliacion[:5])
+
+    # Diagnóstico estructurado de parseo por archivo
+    parser_diagnostico = []
+    if arca_info:
+        parser_diagnostico.append({
+            "archivo": "Comprobantes Emitidos (ARCA)",
+            "metodo": arca_info["metodo"],
+            "confianza": arca_info["confianza"],
+            "mapping": arca_info["mapping"],
+            "columnas_archivo": arca_info.get("columnas_archivo", []),
+            "columnas_faltantes": arca_info.get("columnas_faltantes", []),
+            "columnas_no_mapeadas": arca_info.get("columnas_no_mapeadas", []),
+            "warnings": arca_info.get("warnings", []),
+        })
+
     return {
         "conciliacion": conciliacion,
         "resumen": resumen,
         "bajada_normalizada_path": path_normalizada,
         "mapping_columnas": mapping,
+        "arca_mapping": arca_mapping,
+        "parser_diagnostico": parser_diagnostico,
+        "validacion": validacion,
     }
 
 
@@ -302,35 +350,18 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict) -> list:
     return registros
 
 
-def _procesar_arca(df: pd.DataFrame, tc_map: dict) -> list:
-    """Procesa comprobantes emitidos de ARCA."""
+def _procesar_arca(df: pd.DataFrame, tc_map: dict, mapping: dict = None) -> list:
+    """Procesa comprobantes emitidos de ARCA usando el mapping del smart_parser."""
     registros = []
+    mapping = mapping or {}
 
-    # Detectar columnas ARCA — excluyendo las del receptor (CUIT/comprador)
-    cols = {c.lower(): c for c in df.columns}
-    cols_no_receptor = {
-        k: v for k, v in cols.items()
-        if not any(x in k for x in ["cuit", "receptor", "comprador", "doc receptor", "denomin"])
-    }
-
-    col_tipo = _find_col(cols_no_receptor, ["tipo de comprobante", "tipo comprobante", "tipo"])
-    col_pv = _find_col(cols_no_receptor, ["punto de venta", "pto. vta", "pto vta", "pto venta"])
-    # Para el número: priorizar "desde" sobre nombres genéricos para evitar columnas del receptor
-    col_num = _find_col(cols_no_receptor, [
-        "número desde", "numero desde",
-        "nro comprobante", "nro. comprobante",
-        "número comprobante", "numero comprobante",
-        "número factura", "numero factura",
-        "comprobante", "factura",
-        "número", "numero", "nro"
-    ])
-    col_fecha = _find_col(cols, ["fecha de emisión", "fecha comprobante", "fecha"])
-    col_moneda = _find_col(cols, ["moneda", "mon"])
-    col_tc = _find_col(cols, ["tipo de cambio", "t/c", " tc"])
-    col_total = _find_col(cols, ["importe total", "imp. total", "imp total", "total"])
-
-    print(f"[ARCA] Columnas detectadas: tipo={col_tipo}, pv={col_pv}, num={col_num}, "
-          f"fecha={col_fecha}, moneda={col_moneda}, tc={col_tc}, total={col_total}")
+    col_tipo = mapping.get("tipo_comprobante")
+    col_pv = mapping.get("punto_venta")
+    col_num = mapping.get("numero_comprobante")
+    col_fecha = mapping.get("fecha")
+    col_moneda = mapping.get("moneda")
+    col_tc = mapping.get("tipo_cambio")
+    col_total = mapping.get("monto_total")
 
     for _, row in df.iterrows():
         try:

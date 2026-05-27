@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 import pandas as pd
 import io
+import os
+import tempfile
 import unicodedata
 
 
@@ -15,6 +17,35 @@ from ...core.auth import get_password_hash
 from ...models.user import User
 from ...models.expediente import MaestroSyngenta, Glosario
 from ...schemas.auth import UserCreate, UserResponse
+from ...ai.smart_parser import parsear_excel
+
+
+MAESTRO_SCHEMA = {
+    "nombre_estandar": ["nombre estandar", "nombre estándar", "descripción homogénea",
+                        "descripcion homogenea", "nombre producto", "producto",
+                        "descripción producto", "descripcion producto",
+                        "descripción", "descripcion", "nombre", "articulo", "artículo"],
+    "codigo": ["código", "codigo", "cod", "sku", "id"],
+    "principio_activo": ["principio activo", "principio", "activo"],
+    "categoria": ["categoría", "categoria", "categ", "tipo"],
+}
+
+GLOSARIO_SCHEMA = {
+    "nombre_original": ["nombre original", "original", "articulo facturado",
+                        "artículo facturado", "facturado", "nombre factura",
+                        "producto factura", "nombre ds", "ds"],
+    "nombre_estandar": ["nombre estandar", "nombre estándar", "glosario",
+                       "nombre glosario", "estandar", "estándar",
+                       "nombre normalizado", "normalizado"],
+}
+
+
+def _guardar_temp(content: bytes, suffix: str = ".xlsx") -> str:
+    """Guarda bytes a un archivo temporal, retorna el path."""
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    with os.fdopen(fd, "wb") as f:
+        f.write(content)
+    return path
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -73,50 +104,59 @@ def cargar_maestro_syngenta(
 ):
     """
     Carga/actualiza el maestro de productos Syngenta desde un Excel.
-    Columnas esperadas: código (opcional), nombre_estandar, principio_activo (opcional), categoría (opcional).
+    Usa smart_parser para detectar las columnas con IA si los keywords fallan.
     """
     content = file.file.read()
-    df = pd.read_excel(io.BytesIO(content), dtype=str)
-
-    # Detectar columna de nombre (con normalización de acentos)
-    cols_norm = {_norm(c): c for c in df.columns}
-    col_nombre = None
-    for kw in ["nombre", "producto", "descripcion", "homogenea", "estandar", "articulo"]:
-        for cn, co in cols_norm.items():
-            if kw in cn:
-                col_nombre = co
-                break
-        if col_nombre:
-            break
-
-    if not col_nombre:
-        # Último recurso: usar la primera columna
-        col_nombre = df.columns[0]
-
-    col_codigo = next((co for cn, co in cols_norm.items() if "codigo" in cn), None)
-    col_pa = next((co for cn, co in cols_norm.items() if "principio" in cn or "activo" in cn), None)
-    col_cat = next((co for cn, co in cols_norm.items() if "categor" in cn), None)
-
-    # Marcar todos los anteriores como inactivos
-    db.query(MaestroSyngenta).update({"is_active": False})
-
-    count = 0
-    for _, row in df.iterrows():
-        nombre = str(row.get(col_nombre, "")).strip()
-        if not nombre or nombre.lower() == "nan":
-            continue
-        item = MaestroSyngenta(
-            codigo=str(row.get(col_codigo, "")).strip() if col_codigo else None,
-            nombre_estandar=nombre,
-            principio_activo=str(row.get(col_pa, "")).strip() if col_pa else None,
-            categoria=str(row.get(col_cat, "")).strip() if col_cat else None,
-            is_active=True,
+    tmp_path = _guardar_temp(content)
+    try:
+        resultado = parsear_excel(
+            path=tmp_path,
+            task_id="maestro_syngenta",
+            schema=MAESTRO_SCHEMA,
+            columnas_criticas=["nombre_estandar"],
         )
-        db.add(item)
-        count += 1
+        df = resultado["df"]
+        mapping = resultado["mapping"]
+        col_nombre = mapping.get("nombre_estandar") or df.columns[0]
+        col_codigo = mapping.get("codigo")
+        col_pa = mapping.get("principio_activo")
+        col_cat = mapping.get("categoria")
 
-    db.commit()
-    return {"message": f"Maestro actualizado: {count} productos cargados"}
+        # Marcar todos los anteriores como inactivos
+        db.query(MaestroSyngenta).update({"is_active": False})
+
+        count = 0
+        for _, row in df.iterrows():
+            nombre = str(row.get(col_nombre, "")).strip()
+            if not nombre or nombre.lower() == "nan":
+                continue
+            item = MaestroSyngenta(
+                codigo=str(row.get(col_codigo, "")).strip() if col_codigo else None,
+                nombre_estandar=nombre,
+                principio_activo=str(row.get(col_pa, "")).strip() if col_pa else None,
+                categoria=str(row.get(col_cat, "")).strip() if col_cat else None,
+                is_active=True,
+            )
+            db.add(item)
+            count += 1
+
+        db.commit()
+        return {
+            "message": f"Maestro actualizado: {count} productos cargados",
+            "count": count,
+            "mapping": mapping,
+            "metodo_deteccion": resultado["metodo"],
+            "confianza": resultado["confianza"],
+            "warnings": resultado["warnings"],
+            "columnas_archivo": resultado.get("columnas_archivo", []),
+            "columnas_faltantes": resultado.get("columnas_faltantes", []),
+            "columnas_no_mapeadas": resultado.get("columnas_no_mapeadas", []),
+        }
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 @router.get("/maestro-syngenta")
@@ -147,45 +187,65 @@ def cargar_glosario(
 ):
     """
     Carga el glosario de productos desde un Excel.
-    Columnas esperadas: nombre_original, nombre_estandar.
+    Usa smart_parser para detectar columnas (nombre_original → nombre_estandar).
     """
     content = file.file.read()
-    df = pd.read_excel(io.BytesIO(content), dtype=str)
+    tmp_path = _guardar_temp(content)
+    try:
+        resultado = parsear_excel(
+            path=tmp_path,
+            task_id="glosario",
+            schema=GLOSARIO_SCHEMA,
+            columnas_criticas=["nombre_original", "nombre_estandar"],
+        )
+        df = resultado["df"]
+        mapping = resultado["mapping"]
+        col_orig = mapping.get("nombre_original")
+        col_est = mapping.get("nombre_estandar")
 
-    cols_norm = {_norm(c): c for c in df.columns}
-    col_orig = next(
-        (co for cn, co in cols_norm.items() if "original" in cn or "articulo" in cn or "facturado" in cn),
-        None,
-    )
-    col_est = next(
-        (co for cn, co in cols_norm.items() if "estandar" in cn or "glosario" in cn or "nombre" in cn),
-        None,
-    )
+        # Fallback: si la IA tampoco encontró, usar primera y segunda columnas
+        if not col_orig or not col_est:
+            if len(df.columns) >= 2:
+                col_orig = col_orig or df.columns[0]
+                col_est = col_est or df.columns[1]
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Se requieren columnas nombre_original y nombre_estandar",
+                )
 
-    if not col_orig or not col_est:
-        if len(df.columns) >= 2:
-            col_orig = df.columns[0]
-            col_est = df.columns[1]
-        else:
-            raise HTTPException(status_code=400, detail="Se requieren columnas nombre_original y nombre_estandar")
+        db.query(Glosario).update({"is_active": False})
+        db.flush()
 
-    db.query(Glosario).update({"is_active": False})
-    db.flush()
+        registros = []
+        for _, row in df.iterrows():
+            orig = str(row.get(col_orig, "")).strip()
+            est = str(row.get(col_est, "")).strip()
+            if not orig or not est or orig.lower() == "nan" or est.lower() == "nan":
+                continue
+            registros.append({"nombre_original": orig, "nombre_estandar": est, "is_active": True})
 
-    registros = []
-    for _, row in df.iterrows():
-        orig = str(row.get(col_orig, "")).strip()
-        est = str(row.get(col_est, "")).strip()
-        if not orig or not est or orig.lower() == "nan" or est.lower() == "nan":
-            continue
-        registros.append({"nombre_original": orig, "nombre_estandar": est, "is_active": True})
+        if registros:
+            db.bulk_insert_mappings(Glosario, registros)
 
-    if registros:
-        db.bulk_insert_mappings(Glosario, registros)
-
-    db.commit()
-    count = len(registros)
-    return {"message": f"Glosario actualizado: {count} entradas cargadas", "count": count}
+        db.commit()
+        count = len(registros)
+        return {
+            "message": f"Glosario actualizado: {count} entradas cargadas",
+            "count": count,
+            "mapping": mapping,
+            "metodo_deteccion": resultado["metodo"],
+            "confianza": resultado["confianza"],
+            "warnings": resultado["warnings"],
+            "columnas_archivo": resultado.get("columnas_archivo", []),
+            "columnas_faltantes": resultado.get("columnas_faltantes", []),
+            "columnas_no_mapeadas": resultado.get("columnas_no_mapeadas", []),
+        }
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 @router.get("/glosario")

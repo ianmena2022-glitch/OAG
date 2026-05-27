@@ -9,49 +9,52 @@ import numpy as np
 from typing import List, Dict
 
 from ..ai.justificador import generar_justificaciones
+from ..ai.smart_parser import parsear_excel
 from ..core.config import settings
 from .paso1_service import normalizar_tipo_comprobante, normalizar_monto
 
 
-def leer_crm(path: str) -> pd.DataFrame:
-    """Lee reporte CRM de Syngenta."""
-    for skip in range(5):
-        try:
-            df = pd.read_excel(path, header=skip, dtype=str)
-            df = df.dropna(how="all").dropna(axis=1, how="all")
-            if len(df.columns) >= 4:
-                break
-        except Exception:
-            continue
+CRM_SCHEMA = {
+    "fecha_crm": ["fecha", "date", "fecha factura", "fecha venta"],
+    "tipo_crm": ["tipo de comprobante", "tipo comprobante", "tipo"],
+    "numero_crm": ["número desde", "numero desde", "nro comprobante",
+                   "nro. comprobante", "número factura", "número", "numero",
+                   "nro", "comprobante", "factura"],
+    "cuit_cliente_crm": ["cuit cliente", "cuit comprador", "cuit", "cuil"],
+    "cliente_crm": ["cliente", "razón social", "razon social", "denominación",
+                    "denominacion", "nombre cliente"],
+    "producto_crm": ["producto", "artículo", "articulo", "descripción producto",
+                     "descripcion producto", "descripción", "descripcion", "item"],
+    "cantidad_crm": ["cantidad", "cant", "qty", "unidades", "vol"],
+    "monto_crm": ["monto usd", "importe usd", "total usd", "monto",
+                  "importe total", "total"],
+}
 
-    cols_lower = {c.lower(): c for c in df.columns}
+CRM_EXCLUSIONES = {
+    "numero_crm": ["cuit", "cuil", "doc"],
+    "cuit_cliente_crm": ["proveedor", "vendedor"],
+    "cantidad_crm": ["monto", "importe", "precio"],
+}
 
-    # Detectar columnas
-    col_fecha = _find_col(cols_lower, ["fecha", "date"])
-    col_tipo = _find_col(cols_lower, ["tipo", "comprobante"])
-    col_numero = _find_col(cols_lower, ["numero", "nro", "número"])
-    col_cuit = _find_col(cols_lower, ["cuit", "cuil"])
-    col_cliente = _find_col(cols_lower, ["cliente", "razon", "nombre"])
-    col_producto = _find_col(cols_lower, ["producto", "articulo", "artículo", "descripcion"])
-    col_cantidad = _find_col(cols_lower, ["cantidad", "cant", "qty"])
-    col_monto = _find_col(cols_lower, ["monto", "importe", "total", "usd"])
 
-    rename_map = {}
-    for std, orig in [
-        ("fecha_crm", col_fecha),
-        ("tipo_crm", col_tipo),
-        ("numero_crm", col_numero),
-        ("cuit_cliente_crm", col_cuit),
-        ("cliente_crm", col_cliente),
-        ("producto_crm", col_producto),
-        ("cantidad_crm", col_cantidad),
-        ("monto_crm", col_monto),
-    ]:
-        if orig:
-            rename_map[orig] = std
+def leer_crm(path: str):
+    """Lee reporte CRM usando smart_parser. Retorna (df_renombrado, info_parser)."""
+    resultado = parsear_excel(
+        path=path,
+        task_id="crm",
+        schema=CRM_SCHEMA,
+        excluir_si_contiene=CRM_EXCLUSIONES,
+        columnas_criticas=["fecha_crm", "numero_crm", "producto_crm", "monto_crm"],
+    )
+    df = resultado["df"]
+    mapping = resultado["mapping"]
 
+    rename_map = {orig: std for std, orig in mapping.items() if orig}
     df = df.rename(columns=rename_map)
-    return df
+
+    print(f"[CRM] método={resultado['metodo']} conf={resultado['confianza']:.2f} "
+          f"mapping={mapping} warnings={resultado['warnings']}")
+    return df, resultado
 
 
 def _find_col(cols_lower: dict, keywords: list):
@@ -72,7 +75,7 @@ def ejecutar_paso3(
     """
     # Cargar datos
     df_agro = pd.read_excel(path_agroquimicos_syngenta, dtype=str)
-    df_crm = leer_crm(path_crm)
+    df_crm, crm_info = leer_crm(path_crm)
 
     # Preparar DataFrame de gestión (solo Syngenta)
     df_gestion = _preparar_gestion(df_agro)
@@ -104,9 +107,24 @@ def ejecutar_paso3(
         "solo_crm": sum(1 for r in conciliacion if r.get("estado") == "SOLO_CRM"),
     }
 
+    # Diagnóstico estructurado
+    parser_diagnostico = []
+    if crm_info:
+        parser_diagnostico.append({
+            "archivo": "CRM Syngenta",
+            "metodo": crm_info["metodo"],
+            "confianza": crm_info["confianza"],
+            "mapping": crm_info["mapping"],
+            "columnas_archivo": crm_info.get("columnas_archivo", []),
+            "columnas_faltantes": crm_info.get("columnas_faltantes", []),
+            "columnas_no_mapeadas": crm_info.get("columnas_no_mapeadas", []),
+            "warnings": crm_info.get("warnings", []),
+        })
+
     return {
         "conciliacion": conciliacion,
         "resumen": resumen,
+        "parser_diagnostico": parser_diagnostico,
     }
 
 

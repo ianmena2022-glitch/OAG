@@ -11,7 +11,37 @@ from .paso1_service import (
     normalizar_monto,
     leer_tipos_cambio,
     obtener_tipo_cambio_fecha,
+    normalizar_numero_comprobante,
+    _convertir_a_usd,
 )
+from ..ai.smart_parser import parsear_excel
+
+
+RECIBIDOS_SCHEMA = {
+    "tipo_comprobante": ["tipo de comprobante", "tipo comprobante", "tipo"],
+    "punto_venta": ["punto de venta", "pto. vta", "pto vta", "pto venta", "pv"],
+    "numero_comprobante": ["número desde", "numero desde", "nro desde",
+                            "nro comprobante", "nro. comprobante",
+                            "número comprobante", "comprobante", "factura",
+                            "número", "numero", "nro"],
+    "fecha": ["fecha de emisión", "fecha emisión", "fecha emision",
+              "fecha comprobante", "fecha"],
+    "cuit_proveedor": ["cuit emisor", "cuit vendedor", "cuit proveedor", "cuit", "cuil"],
+    "nombre_proveedor": ["denominación emisor", "denominacion emisor",
+                         "razón social", "razon social", "denominación",
+                         "denominacion", "nombre"],
+    "moneda": ["moneda", "mon"],
+    "tipo_cambio": ["tipo de cambio", "t/c", "tc", "cambio"],
+    "monto_total": ["importe total", "imp. total", "imp total", "total"],
+}
+
+RECIBIDOS_EXCLUSIONES = {
+    # En comprobantes RECIBIDOS, el "receptor" es el propio distribuidor → lo excluimos del CUIT del emisor
+    "numero_comprobante": ["cuit", "cuil", "receptor", "doc receptor", "denominacion"],
+    "cuit_proveedor": ["receptor"],
+    "nombre_proveedor": ["receptor"],
+    "fecha": ["vencimiento", "vto"],
+}
 
 MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
          "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
@@ -29,8 +59,8 @@ def ejecutar_paso4(
                           desglose por tipo de comprobante (FC/NC/ND).
     """
     tc_map = leer_tipos_cambio(path_tc)
-    df = _leer_comprobantes_recibidos(path_recibidos)
-    df = _procesar_recibidos(df, tc_map, anio_analisis)
+    df, recibidos_info = _leer_comprobantes_recibidos(path_recibidos)
+    df = _procesar_recibidos(df, tc_map, anio_analisis, recibidos_info["mapping"])
 
     resumen = _generar_resumen_compras(df, proveedores_apertura)
     totales = {
@@ -38,46 +68,55 @@ def ejecutar_paso4(
         "total_proveedores": df["nombre_proveedor"].nunique(),
     }
 
+    # Diagnóstico estructurado
+    parser_diagnostico = []
+    if recibidos_info:
+        parser_diagnostico.append({
+            "archivo": "Comprobantes Recibidos (ARCA)",
+            "metodo": recibidos_info["metodo"],
+            "confianza": recibidos_info["confianza"],
+            "mapping": recibidos_info["mapping"],
+            "columnas_archivo": recibidos_info.get("columnas_archivo", []),
+            "columnas_faltantes": recibidos_info.get("columnas_faltantes", []),
+            "columnas_no_mapeadas": recibidos_info.get("columnas_no_mapeadas", []),
+            "warnings": recibidos_info.get("warnings", []),
+        })
+
     return {
         "resumen": resumen,
         "totales": totales,
         "detalle": df.to_dict(orient="records"),
+        "parser_diagnostico": parser_diagnostico,
     }
 
 
-def _leer_comprobantes_recibidos(path: str) -> pd.DataFrame:
-    """Lee archivo de comprobantes recibidos de ARCA."""
-    for skip in range(5):
-        try:
-            df = pd.read_excel(path, header=skip, dtype=str)
-            df = df.dropna(how="all").dropna(axis=1, how="all")
-            if len(df.columns) >= 5:
-                break
-        except Exception:
-            continue
-    return df
+def _leer_comprobantes_recibidos(path: str):
+    """Lee comprobantes recibidos usando smart_parser."""
+    resultado = parsear_excel(
+        path=path,
+        task_id="arca_recibidos",
+        schema=RECIBIDOS_SCHEMA,
+        excluir_si_contiene=RECIBIDOS_EXCLUSIONES,
+        columnas_criticas=["tipo_comprobante", "numero_comprobante", "fecha",
+                           "cuit_proveedor", "monto_total"],
+    )
+    print(f"[Recibidos] método={resultado['metodo']} conf={resultado['confianza']:.2f} "
+          f"mapping={resultado['mapping']} warnings={resultado['warnings']}")
+    return resultado["df"], resultado
 
 
-def _procesar_recibidos(df: pd.DataFrame, tc_map: dict, anio: int) -> pd.DataFrame:
-    """Normaliza y convierte a USD los comprobantes recibidos."""
-    cols_lower = {c.lower(): c for c in df.columns}
-
-    def find(kws):
-        for kw in kws:
-            for cl, co in cols_lower.items():
-                if kw in cl:
-                    return co
-        return None
-
-    col_fecha = find(["fecha", "date"])
-    col_tipo = find(["tipo", "comprobante"])
-    col_pv = find(["punto de venta", "pto vta", "pv"])
-    col_num = find(["número", "numero", "nro"])
-    col_cuit = find(["cuit", "cuil"])
-    col_nombre = find(["denominación", "denominacion", "nombre", "razon social", "razón social"])
-    col_moneda = find(["moneda", "mon"])
-    col_tc = find(["tipo de cambio", "tc", "t/c"])
-    col_total = find(["importe total", "total", "imp. total"])
+def _procesar_recibidos(df: pd.DataFrame, tc_map: dict, anio: int, mapping: dict = None) -> pd.DataFrame:
+    """Normaliza y convierte a USD los comprobantes recibidos usando el mapping del smart_parser."""
+    mapping = mapping or {}
+    col_fecha = mapping.get("fecha")
+    col_tipo = mapping.get("tipo_comprobante")
+    col_pv = mapping.get("punto_venta")
+    col_num = mapping.get("numero_comprobante")
+    col_cuit = mapping.get("cuit_proveedor")
+    col_nombre = mapping.get("nombre_proveedor")
+    col_moneda = mapping.get("moneda")
+    col_tc = mapping.get("tipo_cambio")
+    col_total = mapping.get("monto_total")
 
     result = []
     for _, row in df.iterrows():
@@ -90,22 +129,17 @@ def _procesar_recibidos(df: pd.DataFrame, tc_map: dict, anio: int) -> pd.DataFra
             if anio and fecha.year != anio:
                 continue
 
-            pv = str(row.get(col_pv, "0")).strip().zfill(5) if col_pv else "00000"
-            num = str(row.get(col_num, "0")).strip().zfill(8) if col_num else "00000000"
-            numero = f"{pv}-{num}"
+            pv_raw = row.get(col_pv) if col_pv else None
+            num_raw = row.get(col_num) if col_num else None
+            numero = normalizar_numero_comprobante(pv=pv_raw, num=num_raw)
 
             cuit = str(row.get(col_cuit, "")).strip() if col_cuit else ""
             nombre = str(row.get(col_nombre, "")).strip().upper() if col_nombre else ""
-            moneda = str(row.get(col_moneda, "ARS")).upper() if col_moneda else "ARS"
+            moneda = str(row.get(col_moneda, "ARS")).upper().strip() if col_moneda else "ARS"
             tc_val = normalizar_monto(row.get(col_tc)) if col_tc else 0
             monto_total = normalizar_monto(row.get(col_total, 0))
 
-            # Convertir a USD
-            if moneda in ("USD", "U$S", "DOLAR", "DÓLAR"):
-                monto_usd = monto_total
-            else:
-                tc_real = tc_val if tc_val > 1 else obtener_tipo_cambio_fecha(tc_map, fecha.date(), moneda)
-                monto_usd = monto_total / tc_real if tc_real else monto_total
+            monto_usd = _convertir_a_usd(monto_total, moneda, tc_val, fecha, tc_map)
 
             # Signo por tipo
             if tipo == "NC":
