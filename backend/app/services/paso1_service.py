@@ -139,8 +139,15 @@ ARCA_SCHEMA = {
               "fecha comprobante", "fecha"],
     "moneda": ["moneda", "mon"],
     "tipo_cambio": ["tipo de cambio", "t/c", "tc", "cambio"],
-    "monto_neto": ["importe neto gravado", "neto gravado", "imp. neto gravado",
-                   "importe neto", "neto", "gravado", "base imponible"],
+    # Keywords ordenados de más a menos específico: primero buscar la columna
+    # TOTAL del neto (suma de todos los tramos de IVA), no la columna parcial.
+    # "neto gravado total" NO es substring de "imp. neto gravado" → no hay falso positivo.
+    "monto_neto": [
+        "neto gravado total", "imp. neto gravado total", "importe neto gravado total",
+        "gravado total",
+        "neto gravado", "imp. neto gravado", "importe neto gravado",
+        "importe neto", "neto", "gravado", "base imponible",
+    ],
     "monto_total": ["importe total", "imp. total", "imp total", "total"],
 }
 
@@ -853,9 +860,12 @@ def _procesar_arca(df: pd.DataFrame, tc_map: dict, mapping: dict = None) -> list
 
             moneda = str(row.get(col_moneda, "ARS")).upper().strip() if col_moneda else "ARS"
             tc = normalizar_monto(row.get(col_tc)) if col_tc else 0
-            monto_total = normalizar_monto(row.get(col_monto_base, 0) if col_monto_base else 0)
+            monto_base = normalizar_monto(row.get(col_monto_base, 0) if col_monto_base else 0)
+            # NC/ND en ARCA pueden tener neto=0 en la columna gravado — fallback a total
+            if monto_base == 0 and col_total and col_neto:
+                monto_base = normalizar_monto(row.get(col_total, 0))
 
-            monto_usd = _convertir_a_usd(monto_total, moneda, tc, fecha, tc_map)
+            monto_usd = _convertir_a_usd(monto_base, moneda, tc, fecha, tc_map)
 
             # ARCA: NC siempre positivo → negativizar
             if tipo == "NC":
