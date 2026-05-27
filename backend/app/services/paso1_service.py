@@ -17,9 +17,31 @@ TIPOS_NC = {"NC", "NOTA DE CREDITO", "NOTA DE CRÉDITO", "NCD", "N/C"}
 TIPOS_ND = {"ND", "NOTA DE DEBITO", "NOTA DE DÉBITO", "NDD", "N/D"}
 
 
-def normalizar_tipo_comprobante(tipo: str) -> str:
-    if not tipo or pd.isna(tipo):
+# Códigos numéricos AFIP/ARCA → tipo estándar
+CODIGOS_ARCA = {
+    # Notas de Crédito (todos los tipos)
+    3: "NC", 8: "NC", 13: "NC", 53: "NC",
+    203: "NC", 208: "NC", 213: "NC",
+    # Notas de Débito
+    2: "ND", 7: "ND", 12: "ND", 52: "ND",
+    202: "ND", 207: "ND", 212: "ND",
+    # Facturas (1, 6, 11, 51, 201, 206, 211 y resto)
+    1: "FC", 6: "FC", 11: "FC", 51: "FC",
+    201: "FC", 206: "FC", 211: "FC",
+}
+
+
+def normalizar_tipo_comprobante(tipo) -> str:
+    if tipo is None or (isinstance(tipo, float) and pd.isna(tipo)):
         return "FC"
+    # Primero intentar como código numérico AFIP/ARCA
+    try:
+        codigo = int(float(str(tipo).strip()))
+        if codigo in CODIGOS_ARCA:
+            return CODIGOS_ARCA[codigo]
+    except (ValueError, TypeError):
+        pass
+    # Fallback: match por texto
     tipo_upper = str(tipo).upper().strip()
     if any(t in tipo_upper for t in TIPOS_NC):
         return "NC"
