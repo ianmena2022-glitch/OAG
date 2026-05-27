@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { expedientesAPI, pasosAPI } from '../../lib/api'
 import { useNotificationStore } from '../../store'
@@ -28,22 +28,34 @@ export default function Paso1({ expediente }: Props) {
   const qc = useQueryClient()
   const { push } = useNotificationStore()
   const [uploading, setUploading] = useState<Record<string, boolean>>({})
+  const [erpUploading, setErpUploading] = useState(0)   // contador de uploads ERP en curso
   const [deletingId, setDeletingId] = useState<number | null>(null)
-  const erpInputRef = useRef<HTMLInputElement>(null)
 
   const archivos = expediente.archivos || []
   const getArchivo = (tipo: string) => archivos.find((a: any) => a.tipo === tipo)
-  // Para BAJADA_GESTION puede haber varios
   const archivosGestion: any[] = archivos.filter((a: any) => a.tipo === 'BAJADA_GESTION')
+
+  const handleUploadErp = async (file: File) => {
+    setErpUploading((n) => n + 1)
+    try {
+      await expedientesAPI.subirArchivo(expediente.id, 'BAJADA_GESTION', file)
+      qc.invalidateQueries({ queryKey: ['expediente', String(expediente.id)] })
+      push('success', `"${file.name}" cargado`)
+    } catch (err: any) {
+      push('error', err.response?.data?.detail || `Error al subir "${file.name}"`)
+    } finally {
+      setErpUploading((n) => n - 1)
+    }
+  }
 
   const handleUpload = async (tipo: string, file: File) => {
     setUploading((p) => ({ ...p, [tipo]: true }))
     try {
       await expedientesAPI.subirArchivo(expediente.id, tipo, file)
       qc.invalidateQueries({ queryKey: ['expediente', String(expediente.id)] })
-      push('success', `Archivo ERP "${file.name}" cargado`)
-    } catch {
-      push('error', 'Error al subir archivo')
+      push('success', 'Archivo cargado correctamente')
+    } catch (err: any) {
+      push('error', err.response?.data?.detail || 'Error al subir archivo')
     } finally {
       setUploading((p) => ({ ...p, [tipo]: false }))
     }
@@ -64,7 +76,8 @@ export default function Paso1({ expediente }: Props) {
 
   const handleErpFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
-    files.forEach((file) => handleUpload('BAJADA_GESTION', file))
+    files.forEach((file) => handleUploadErp(file))
+    // Resetear el input para que el mismo archivo pueda volver a seleccionarse
     e.target.value = ''
   }
 
@@ -133,54 +146,65 @@ export default function Paso1({ expediente }: Props) {
 
         {/* Bajada de Gestión — multi-archivo */}
         <div className="mb-4">
+          {/* Input de archivo — siempre presente, activado por el label */}
+          <input
+            id="erp-file-input"
+            type="file"
+            multiple
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={handleErpFileSelect}
+          />
+
           <div className="flex items-center justify-between mb-2">
             <div>
               <p className="text-xs font-semibold text-oag-text">Bajada de Gestión (ERP)</p>
-              <p className="text-xs text-oag-muted">Reportes de ventas del ERP del distribuidor — podés subir varios archivos</p>
+              <p className="text-xs text-oag-muted">
+                Reportes de ventas del ERP — podés subir varios archivos (uno por tipo de comprobante o todo junto)
+              </p>
             </div>
-            <button
-              type="button"
-              onClick={() => erpInputRef.current?.click()}
-              disabled={!!uploading['BAJADA_GESTION']}
+            <label
+              htmlFor="erp-file-input"
               className={cn(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border transition-colors',
+                'flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border transition-colors cursor-pointer',
                 archivosGestion.length === 0
                   ? 'border-oag-blue text-oag-blue hover:bg-oag-blue/5'
                   : 'border-oag-border text-oag-muted hover:text-oag-text hover:border-oag-text'
               )}
             >
-              {uploading['BAJADA_GESTION'] ? (
+              {erpUploading > 0 ? (
                 <Loader size={12} className="animate-spin" />
               ) : (
                 <Plus size={12} />
               )}
               {archivosGestion.length === 0 ? 'Agregar archivo ERP' : 'Agregar otro'}
-            </button>
-            <input
-              ref={erpInputRef}
-              type="file"
-              multiple
-              accept=".xlsx,.xls,.csv"
-              className="hidden"
-              onChange={handleErpFileSelect}
-            />
+              {erpUploading > 0 && ` (${erpUploading} subiendo...)`}
+            </label>
           </div>
 
-          {archivosGestion.length === 0 ? (
-            <div
-              onClick={() => erpInputRef.current?.click()}
-              className="border-2 border-dashed border-oag-border rounded-lg p-6 text-center cursor-pointer hover:border-oag-blue/50 hover:bg-oag-blue/5 transition-colors"
+          {archivosGestion.length === 0 && erpUploading === 0 ? (
+            <label
+              htmlFor="erp-file-input"
+              className="border-2 border-dashed border-oag-border rounded-lg p-6 text-center cursor-pointer hover:border-oag-blue/50 hover:bg-oag-blue/5 transition-colors block"
             >
               <FileText size={24} className="text-oag-muted mx-auto mb-2" />
               <p className="text-xs text-oag-muted">
-                Arrastrá o hacé click para subir archivos ERP
+                Hacé click para subir archivos ERP
               </p>
               <p className="text-xs text-oag-muted/70 mt-0.5">
                 Podés subir uno por tipo: facturas, notas de crédito, etc.
               </p>
-            </div>
+            </label>
           ) : (
             <div className="space-y-1.5">
+              {erpUploading > 0 && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50/50">
+                  <Loader size={13} className="text-blue-600 animate-spin flex-shrink-0" />
+                  <span className="text-xs text-blue-700">
+                    Subiendo {erpUploading} archivo{erpUploading > 1 ? 's' : ''}...
+                  </span>
+                </div>
+              )}
               {archivosGestion.map((a: any) => (
                 <div
                   key={a.id}
