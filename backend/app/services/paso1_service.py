@@ -4,6 +4,7 @@ Compara bajada de gestión vs comprobantes emitidos (ARCA).
 Salida: conciliación por comprobante con diferencias.
 """
 import os
+import re
 from datetime import date
 import pandas as pd
 import numpy as np
