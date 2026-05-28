@@ -112,27 +112,57 @@ def _preparar_df(df: pd.DataFrame, anio: int) -> pd.DataFrame:
     else:
         df["monto_usd"] = 0.0
 
-    # ── articulo ── buscar variantes
+    # ── articulo ── buscar variantes (match exacto primero, luego parcial)
+    _ART_EXACT = {
+        "articulo", "artículo", "producto", "descripcion", "descripción",
+        "description", "item", "detalle", "concepto",
+    }
+    _ART_SUBSTR = (
+        "articulo", "artículo", "producto", "descripcion", "descripción",
+        "detalle", "item", "concepto", "description", "product",
+    )
+    _ART_EXCL = (
+        "cliente", "razon", "cuit", "cuil", "numero", "número", "nro",
+        "comprobante", "tipo", "fecha", "moneda", "total", "importe", "monto",
+        "subtotal", "iva",
+    )
     col_art = next(
-        (c for c in df.columns if str(c).strip().lower() in (
-            "articulo", "artículo", "producto", "descripcion", "descripción",
-            "description", "item", "detalle"
-        )),
+        (c for c in df.columns if str(c).strip().lower() in _ART_EXACT),
         None
     )
+    if col_art is None:
+        col_art = next(
+            (c for c in df.columns
+             if any(k in str(c).strip().lower() for k in _ART_SUBSTR)
+             and not any(excl in str(c).strip().lower() for excl in _ART_EXCL)),
+            None
+        )
     df["articulo"] = (
         df[col_art].fillna("SIN DESCRIPCIÓN").astype(str).str.strip().str.upper()
         if col_art else "SIN DESCRIPCIÓN"
     )
 
     # ── cliente ──
+    _CLI_EXACT = {
+        "cliente", "razon_social", "razon social", "client", "nombre_cliente",
+        "nombre cliente", "denominacion", "denominación",
+    }
+    _CLI_SUBSTR = ("cliente", "razon", "receptor", "comprador", "denominacion", "denominación")
+    _CLI_EXCL = (
+        "cuit", "cuil", "numero", "número", "nro", "comprobante",
+        "tipo", "fecha", "moneda", "total", "importe", "monto", "articulo",
+    )
     col_cli = next(
-        (c for c in df.columns if str(c).strip().lower() in (
-            "cliente", "razon_social", "razon social", "client", "nombre_cliente",
-            "nombre cliente", "denominacion", "denominación"
-        )),
+        (c for c in df.columns if str(c).strip().lower() in _CLI_EXACT),
         None
     )
+    if col_cli is None:
+        col_cli = next(
+            (c for c in df.columns
+             if any(k in str(c).strip().lower() for k in _CLI_SUBSTR)
+             and not any(excl in str(c).strip().lower() for excl in _CLI_EXCL)),
+            None
+        )
     df["cliente"] = (
         df[col_cli].fillna("SIN NOMBRE").astype(str).str.strip().str.upper()
         if col_cli else "SIN NOMBRE"

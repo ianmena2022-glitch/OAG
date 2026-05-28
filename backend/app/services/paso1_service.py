@@ -174,6 +174,17 @@ GESTION_SCHEMA = {
         "fecha venta", "fecha movimiento", "fecha", "fec comp", "fec. comp",
         "fec comprobante", "fec. comprobante", "date", "fec", "fecha registro",
     ],
+    "articulo": [
+        "descripcion articulo", "descripción artículo", "descripcion de articulo",
+        "descripcion del articulo", "desc articulo", "desc. articulo",
+        "nombre articulo", "nombre del articulo", "nombre de articulo",
+        "descripcion producto", "descripción producto", "nombre producto",
+        "desc producto", "desc. producto", "detalle articulo", "detalle producto",
+        "denominacion articulo", "denominación artículo", "denominacion producto",
+        "artículo", "articulo", "producto",
+        "descripcion", "descripción", "detalle", "concepto", "item",
+        "description", "product", "name",
+    ],
     "tipo_comprobante": [
         "tipo de comprobante", "tipo comprobante", "tipo documento", "tipo doc",
         "tipo de documento", "clase comprobante", "clase de comprobante",
@@ -259,6 +270,13 @@ GESTION_EXCLUSIONES = {
     "punto_venta": ["cuit", "cuil", "tipo", "moneda", "divisa", "cliente"],
     # fecha del comprobante, no de vencimiento
     "fecha": ["vencimiento", "vto", "venc", "pago", "cobro"],
+    # articulo NO debe confundirse con cliente, CUIT, número de comprobante, fechas, montos
+    "articulo": [
+        "cliente", "razon", "receptor", "comprador",
+        "cuit", "cuil", "nro", "numero", "número", "comprobante",
+        "tipo", "fecha", "moneda", "total", "importe", "monto",
+        "subtotal", "iva", "impuesto",
+    ],
 }
 
 
