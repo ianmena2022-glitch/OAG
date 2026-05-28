@@ -20,6 +20,16 @@ Reglas críticas de coherencia:
 6. Montos negativos en facturas comunes (no NC) son sospechosos.
 7. Fechas fuera del año analizado son sospechosas.
 
+CÓMO ESCRIBIR LAS ALERTAS (muy importante):
+- Escribí para un CONTADOR, no para un programador. Nada de términos técnicos
+  (ETL, pipeline, dataframe, parseo, mapeo, nulls). Usá palabras simples y directas.
+- Título: corto y claro, qué pasa en criollo (ej: "Hay ventas sin cliente").
+- Detalle: una o dos frases con los NÚMEROS concretos y, si se puede, DÓNDE mirar
+  (nombre del archivo, columna, o número de comprobante). Frases cortas.
+- Sugerencia: una acción concreta que el contador pueda hacer (ej: "Revisá la
+  columna de cliente en el archivo X y volvé a ejecutar").
+- No repitas lo mismo en título, detalle y sugerencia.
+
 Devolvé ÚNICAMENTE un JSON con el formato:
 {
   "ok": true|false,
@@ -27,9 +37,9 @@ Devolvé ÚNICAMENTE un JSON con el formato:
   "alertas": [
     {
       "nivel": "info" | "warning" | "error",
-      "titulo": "Título corto",
-      "detalle": "Explicación específica con números",
-      "sugerencia": "Qué revisar o hacer"
+      "titulo": "Título corto y claro",
+      "detalle": "Qué pasa, con números y dónde mirar. Frases cortas.",
+      "sugerencia": "Qué hacer concretamente"
     }
   ]
 }
@@ -74,13 +84,32 @@ Revisá si hay inconsistencias o anomalías. Sé específico con los números.""
         if "ok" not in data:
             data["ok"] = len(data.get("alertas", [])) == 0
         if "severidad" not in data:
-            niveles = [a.get("nivel", "info") for a in data.get("alertas", [])]
-            if "error" in niveles:
-                data["severidad"] = "error"
-            elif "warning" in niveles:
-                data["severidad"] = "warning"
-            else:
-                data["severidad"] = "info"
+            data["severidad"] = _severidad(data.get("alertas", []))
         return data
     except (json.JSONDecodeError, TypeError):
         return {"ok": True, "severidad": "info", "alertas": [], "raw_response": raw[:500]}
+
+
+def _severidad(alertas: list) -> str:
+    """Severidad global = la más alta entre las alertas."""
+    niveles = [a.get("nivel", "info") for a in alertas]
+    if "error" in niveles:
+        return "error"
+    if "warning" in niveles:
+        return "warning"
+    return "info"
+
+
+def combinar_validacion(deterministicas: list, ia: dict) -> dict:
+    """
+    Une las guardas determinísticas (que SIEMPRE corren, sin IA) con las alertas
+    de la IA (que pueden no estar disponibles). Las determinísticas van primero
+    porque son las confiables. Devuelve {ok, severidad, alertas}.
+    """
+    ia = ia or {}
+    alertas = list(deterministicas or []) + list(ia.get("alertas", []))
+    return {
+        "ok": len(alertas) == 0,
+        "severidad": _severidad(alertas),
+        "alertas": alertas,
+    }

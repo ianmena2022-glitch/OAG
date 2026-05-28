@@ -18,7 +18,7 @@ from ...models.expediente import (
 )
 from ...services import paso1_service, paso2_service, paso3_service
 from ...services import paso4_service, paso5_service, paso6_service
-from ...ai.validator import validar_paso
+from ...ai.validator import validar_paso, combinar_validacion
 
 router = APIRouter(prefix="/expedientes/{exp_id}/pasos", tags=["pasos"])
 
@@ -377,8 +377,9 @@ def ejecutar_paso2(
     _save_resultado(db, exp_id, 2, "agroquimicos", archivo_path=resultado["agroquimicos_path"])
     _save_resultado(db, exp_id, 2, "totales", datos=resultado["totales"])
 
-    # Validación IA
-    validacion = validar_paso(2, resultado["totales"], muestra=resultado["ranking_clientes"][:5])
+    # Validación: guardas determinísticas (siempre) + IA (si está disponible)
+    validacion_ia = validar_paso(2, resultado["totales"], muestra=resultado["ranking_clientes"][:5])
+    validacion = combinar_validacion(resultado.get("guardas", []), validacion_ia)
     _save_resultado(db, exp_id, 2, "validacion", datos=validacion)
     _marcar_paso_completado(exp, 2, db)
 

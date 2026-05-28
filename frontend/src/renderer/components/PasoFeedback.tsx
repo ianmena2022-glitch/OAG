@@ -247,7 +247,7 @@ export default function PasoFeedback({ validacion, parserDiagnostico, parserWarn
                   : 'text-blue-700'
               )}
             />
-            <p className="text-xs font-semibold text-oag-text">Revisión IA del resultado</p>
+            <p className="text-xs font-semibold text-oag-text">Revisión del resultado</p>
           </div>
           <div className="space-y-2">
             {alertas.map((a, i) => (

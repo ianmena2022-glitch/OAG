@@ -69,6 +69,14 @@ def ejecutar_paso2(
     path_agro = os.path.join(upload_dir, "bajada_agroquimicos.xlsx")
     df_agro.to_excel(path_agro, index=False)
 
+    totales = {
+        "total_facturado_usd": round(df["monto_usd"].sum(), 2),
+        "total_agro_usd": round(df_agro["monto_usd"].sum(), 2),
+        "cant_productos": len(productos_unicos),
+        "cant_productos_agro": len(productos_agro),
+        "diagnostico": df.attrs.get("diagnostico", {}),
+    }
+
     return {
         "ranking_clientes": ranking_clientes,
         "ranking_productos": ranking_productos,
@@ -76,14 +84,73 @@ def ejecutar_paso2(
         "clasificacion": reporte_clasificacion,
         "tabla_apertura": tabla_apertura,
         "agroquimicos_path": path_agro,
-        "totales": {
-            "total_facturado_usd": round(df["monto_usd"].sum(), 2),
-            "total_agro_usd": round(df_agro["monto_usd"].sum(), 2),
-            "cant_productos": len(productos_unicos),
-            "cant_productos_agro": len(productos_agro),
-            "diagnostico": df.attrs.get("diagnostico", {}),
-        },
+        "totales": totales,
+        # Guardas determinísticas (no dependen de IA) para mostrar como alertas
+        "guardas": _guardas_paso2(df, totales),
     }
+
+
+def _guardas_paso2(df: pd.DataFrame, totales: dict) -> list:
+    """
+    Controles determinísticos del Paso 2. Mensajes simples y con la ubicación
+    del problema (qué archivo / qué columna mirar). Devuelve lista de alertas.
+    """
+    alertas = []
+    total = sum(abs(x) for x in df["monto_usd"]) or 0.0
+
+    def _archivos_de(mask) -> str:
+        if "archivo" not in df.columns:
+            return ""
+        vals = [a for a in df.loc[mask, "archivo"].dropna().unique().tolist() if str(a).strip()]
+        return ", ".join(map(str, vals))
+
+    # 1. Ventas sin cliente identificado
+    mask_sn = df["cliente"] == "SIN NOMBRE"
+    monto_sn = df.loc[mask_sn, "monto_usd"].abs().sum()
+    if total and monto_sn / total > 0.20:
+        arch = _archivos_de(mask_sn)
+        alertas.append({
+            "nivel": "warning",
+            "titulo": "Hay ventas sin cliente identificado",
+            "detalle": (
+                f"El {monto_sn / total * 100:.0f}% de lo facturado (US$ {monto_sn:,.0f}) está en filas "
+                f"sin nombre de cliente." + (f" Archivo(s): {arch}." if arch else "")
+            ),
+            "sugerencia": "Revisá la columna de cliente en ese archivo: puede faltar o estar vacía en algunas filas.",
+        })
+
+    # 2. Ventas sin producto identificado
+    mask_sd = df["articulo"] == "SIN DESCRIPCIÓN"
+    monto_sd = df.loc[mask_sd, "monto_usd"].abs().sum()
+    if total and monto_sd / total > 0.30:
+        arch = _archivos_de(mask_sd)
+        alertas.append({
+            "nivel": "warning",
+            "titulo": "Hay ventas sin producto identificado",
+            "detalle": (
+                f"El {monto_sd / total * 100:.0f}% de lo facturado (US$ {monto_sd:,.0f}) no tiene producto "
+                f"asignado." + (f" Archivo(s): {arch}." if arch else "")
+                + " (Las notas de crédito/débito no tienen detalle de producto y caen acá; eso es normal.)"
+            ),
+            "sugerencia": "Si el porcentaje es alto por facturas de venta, revisá la columna de producto en ese archivo.",
+        })
+
+    # 3. Año pedido distinto al de los datos
+    diag = totales.get("diagnostico") or {}
+    if str(diag.get("filtro_aplicado", "")).startswith("SIN FILTRO"):
+        anios = diag.get("anios_presentes") or []
+        pedido = diag.get("anio_pedido")
+        alertas.append({
+            "nivel": "info",
+            "titulo": "El año pedido no coincide con los datos",
+            "detalle": (
+                f"Pediste analizar el año {pedido}, pero los archivos tienen datos de "
+                f"{', '.join(map(str, anios)) or 'otro año'}. Se analizaron todos los datos disponibles."
+            ),
+            "sugerencia": f"Si el período correcto es {', '.join(map(str, anios)) or 'otro'}, cambiá el año del expediente.",
+        })
+
+    return alertas
 
 
 def _preparar_df(df: pd.DataFrame, anio: int) -> pd.DataFrame:

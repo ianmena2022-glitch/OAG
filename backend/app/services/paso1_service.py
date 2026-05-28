@@ -595,6 +595,7 @@ def ejecutar_paso1(
     # 2. Procesar TODOS los archivos de bajada de gestión
     all_registros_gestion = []
     parser_diagnostico = []
+    diag_gestion = {"sin_fecha": [], "sin_tc": []}   # acumulador para las guardas
 
     for path_bajada, nombre_archivo in paths_bajada:
         df_gestion, gestion_mapping, gestion_info = leer_bajada_gestion(path_bajada)
@@ -602,7 +603,8 @@ def ejecutar_paso1(
         tipo_inferido = metadata.get("tipo_inferido")
 
         registros = _procesar_gestion(
-            df_gestion, tc_map, mapping=gestion_mapping, tipo_inferido=tipo_inferido
+            df_gestion, tc_map, mapping=gestion_mapping, tipo_inferido=tipo_inferido,
+            archivo=nombre_archivo, diag=diag_gestion,
         )
         all_registros_gestion.extend(registros)
 
@@ -692,35 +694,125 @@ def ejecutar_paso1(
         "monto_total_gestion_usd": sum(r["monto_usd"] for r in registros_gestion),
     }
 
-    # Alertas estructurales (no-IA) — problemas que no deberían ocurrir
-    alertas = []
-    if solo_gestion:
-        monto_sg = sum(r["monto_usd_gestion"] for r in solo_gestion)
-        ejemplos = [r["numero"] for r in solo_gestion[:3]]
-        alertas.append({
-            "nivel": "error",
-            "titulo": f"{len(solo_gestion)} comprobante(s) en Gestión sin registro en ARCA",
-            "detalle": (
-                f"Estos comprobantes existen en el ERP pero ARCA no tiene registro fiscal de ellos. "
-                f"Monto total: USD {monto_sg:,.2f}. "
-                f"Ejemplos: {', '.join(ejemplos)}{'...' if len(solo_gestion) > 3 else ''}. "
-                f"Verificar si faltan archivos ERP, si los comprobantes fueron anulados, "
-                f"o si hay comprobantes emitidos fuera del sistema."
-            ),
-        })
+    # ── Guardas deterministas (NO dependen de IA) ──
+    # Separan problemas graves (alertas rojas que frenan) de avisos para revisar.
+    guardas = _guardas_paso1(resumen, solo_gestion, diag_gestion)
 
-    # Validación con IA
-    from ..ai.validator import validar_paso
-    validacion = validar_paso(1, resumen, muestra=conciliacion[:5])
+    # Validación con IA (complementaria; puede no estar disponible)
+    from ..ai.validator import validar_paso, combinar_validacion
+    validacion_ia = validar_paso(1, resumen, muestra=conciliacion[:5])
+    # Las guardas de "revisión" se muestran junto con las alertas de la IA
+    validacion = combinar_validacion(guardas["revision"], validacion_ia)
 
     return {
         "conciliacion": conciliacion,
         "resumen": resumen,
-        "alertas": alertas,
+        "alertas": guardas["criticas"],   # alertas rojas (problemas graves)
         "bajada_normalizada_path": path_normalizada,
         "parser_diagnostico": parser_diagnostico,
         "validacion": validacion,
     }
+
+
+def _guardas_paso1(resumen: dict, solo_gestion: list, diag: dict) -> dict:
+    """
+    Controles determinísticos del Paso 1. Devuelve {criticas, revision}:
+      - criticas: problemas graves (las cuentas no cierran, ventas no registradas en ARCA)
+      - revision: avisos para mirar (faltan cotizaciones, filas sin fecha)
+    Mensajes en lenguaje simple y con la ubicación del problema en los archivos.
+    """
+    criticas = []
+    revision = []
+
+    # 1. Conservación: el total tiene que ser igual a la suma de sus partes
+    suma_arca = resumen["ok"] + resumen["con_diferencia"] + resumen["solo_arca"]
+    if suma_arca != resumen["total_arca"]:
+        criticas.append({
+            "nivel": "error",
+            "titulo": "Las cuentas de ARCA no cierran",
+            "detalle": (
+                f"Los {resumen['total_arca']} comprobantes de ARCA deberían repartirse en "
+                f"OK ({resumen['ok']}) + Diferencias ({resumen['con_diferencia']}) + "
+                f"Solo ARCA ({resumen['solo_arca']}) = {suma_arca}. "
+                f"Sobran o faltan {abs(resumen['total_arca'] - suma_arca)} comprobante(s)."
+            ),
+            "sugerencia": "Es un error interno del cálculo. No uses estos totales para el informe y avisá a soporte técnico.",
+        })
+
+    suma_gestion = resumen["ok"] + resumen["con_diferencia"] + resumen["solo_gestion"]
+    if suma_gestion != resumen["total_gestion"]:
+        criticas.append({
+            "nivel": "error",
+            "titulo": "Las cuentas de Gestión no cierran",
+            "detalle": (
+                f"Los {resumen['total_gestion']} comprobantes de Gestión deberían repartirse en "
+                f"OK ({resumen['ok']}) + Diferencias ({resumen['con_diferencia']}) + "
+                f"Solo Gestión ({resumen['solo_gestion']}) = {suma_gestion}. "
+                f"Sobran o faltan {abs(resumen['total_gestion'] - suma_gestion)} comprobante(s)."
+            ),
+            "sugerencia": "Es un error interno del cálculo. No uses estos totales para el informe y avisá a soporte técnico.",
+        })
+
+    # 2. Ventas en Gestión que ARCA no registró
+    if solo_gestion:
+        monto_sg = sum(r["monto_usd_gestion"] for r in solo_gestion)
+        ejemplos = ", ".join(r["numero"] for r in solo_gestion[:3])
+        criticas.append({
+            "nivel": "error",
+            "titulo": f"{len(solo_gestion)} comprobante(s) están en tu sistema pero NO en ARCA",
+            "detalle": (
+                f"Suman US$ {monto_sg:,.2f}. Significa que el ERP tiene facturas que ARCA no registró. "
+                f"Ejemplos (número de comprobante): {ejemplos}"
+                f"{'…' if len(solo_gestion) > 3 else ''}."
+            ),
+            "sugerencia": (
+                "Buscá esos números en el archivo de ARCA. Puede que falte cargar un archivo de ARCA, "
+                "que esos comprobantes estén anulados, o que se hayan emitido fuera del sistema."
+            ),
+        })
+
+    # 3. Faltan cotizaciones del dólar → comprobantes que quedaron en USD 0
+    sin_tc = diag.get("sin_tc", [])
+    if sin_tc:
+        fechas = sorted({r["fecha"] for r in sin_tc})
+        archivos = sorted({r["archivo"] for r in sin_tc if r.get("archivo")})
+        fechas_txt = ", ".join(fechas[:8]) + ("…" if len(fechas) > 8 else "")
+        revision.append({
+            "nivel": "warning",
+            "titulo": "Faltan cotizaciones del dólar para algunas fechas",
+            "detalle": (
+                f"{len(sin_tc)} comprobante(s) quedaron en US$ 0 porque el archivo de Tipos de Cambio "
+                f"no tiene cotización para estas fechas: {fechas_txt}. "
+                f"Archivo(s) afectado(s): {', '.join(archivos) if archivos else 'gestión'}."
+            ),
+            "sugerencia": (
+                "Agregá esas fechas con su cotización ARS/USD al archivo 'Tipos de Cambio' "
+                "y volvé a ejecutar el Paso 1."
+            ),
+        })
+
+    # 4. Filas sin fecha que se saltearon (suelen ser totales/subtotales)
+    sin_fecha = diag.get("sin_fecha", [])
+    if sin_fecha:
+        archivos = sorted({r["archivo"] for r in sin_fecha if r.get("archivo")})
+        ejemplos = ", ".join(
+            f'"{r["cliente"]}"' for r in sin_fecha[:3] if r.get("cliente")
+        )
+        revision.append({
+            "nivel": "info",
+            "titulo": f"Se saltearon {len(sin_fecha)} fila(s) sin fecha",
+            "detalle": (
+                f"No se procesaron porque no tienen fecha (suelen ser filas de totales o subtotales). "
+                f"Archivo(s): {', '.join(archivos) if archivos else 'gestión'}."
+                + (f" Ejemplos (columna cliente): {ejemplos}." if ejemplos else "")
+            ),
+            "sugerencia": (
+                "Es normal si son filas de totales. Si fueran ventas reales, "
+                "revisá que tengan fecha en el archivo original."
+            ),
+        })
+
+    return {"criticas": criticas, "revision": revision}
 
 
 def _inferir_moneda_por_valor(montos: list) -> str:
@@ -741,15 +833,24 @@ def _inferir_moneda_por_valor(montos: list) -> str:
 
 
 def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
-                      tipo_inferido: str = None) -> list:
+                      tipo_inferido: str = None, archivo: str = "",
+                      diag: dict = None) -> list:
     """
     Procesa la bajada de gestión usando el mapping detectado por smart_parser.
     El df tiene columnas con sus nombres ORIGINALES del ERP.
     El mapping indica qué columna original corresponde a cada campo estándar.
 
     tipo_inferido: "NC" | "ND" | None — tipo forzado si se detectó en el título del reporte.
+    archivo: nombre del archivo original (para mensajes de error ubicables).
+    diag: dict acumulador opcional. Se llenan listas:
+          - "sin_fecha": filas omitidas por no tener fecha (suelen ser totales)
+          - "sin_tc":    filas con monto en ARS que no se pudieron pasar a USD
+                         (falta cotización para esa fecha)
     """
     mapping = mapping or {}
+    if diag is not None:
+        diag.setdefault("sin_fecha", [])
+        diag.setdefault("sin_tc", [])
 
     col_tipo      = mapping.get("tipo_comprobante")
     col_pv        = mapping.get("punto_venta")
@@ -809,6 +910,14 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
             fecha_raw = row.get(col_fecha) if col_fecha else None
             fecha = pd.to_datetime(fecha_raw, errors="coerce")
             if pd.isna(fecha):
+                if diag is not None and len(diag["sin_fecha"]) < 20:
+                    _cli = str(row.get(col_cliente, "") if col_cliente else "").strip()
+                    _mon = normalizar_monto(row.get(col_monto_base)) if col_monto_base else 0
+                    diag["sin_fecha"].append({
+                        "archivo": archivo,
+                        "cliente": _cli or "(vacío)",
+                        "monto_original": _mon,
+                    })
                 continue
 
             # Tipo de comprobante: prioridad → columna > título del reporte > FC por defecto
@@ -877,6 +986,22 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
                 monto_usd = 0.0
                 moneda = "ARS"
 
+            # Diagnóstico: monto en ARS sin cotización disponible para esa fecha.
+            # Se chequea la DISPONIBILIDAD real del TC (no el resultado), para no
+            # confundir "falta cotización" con "monto chico que da ~0 USD".
+            if (diag is not None and monto_original
+                    and str(moneda).upper() not in ("USD", "U$S", "DOLAR", "DÓLAR", "DOL")
+                    and len(diag["sin_tc"]) < 50):
+                _fecha_tc = fecha.date() if hasattr(fecha, "date") else fecha
+                _tc_disp = obtener_tipo_cambio_fecha(tc_map, _fecha_tc, moneda)
+                if not _tc_disp or _tc_disp <= 1:
+                    diag["sin_tc"].append({
+                        "archivo": archivo,
+                        "fecha": fecha.strftime("%Y-%m-%d"),
+                        "monto_original": monto_original,
+                        "moneda": moneda,
+                    })
+
             # Signo por tipo de comprobante
             if tipo == "NC":
                 monto_usd = -abs(monto_usd)
@@ -902,6 +1027,7 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
                 "cliente": cliente_raw,
                 "cuit_cliente": str(row.get(col_cuit, "") if col_cuit else ""),
                 "articulo": str(row.get(col_articulo, "") if col_articulo else "").strip(),
+                "archivo": archivo,
                 "moneda": moneda,
                 "monto_original": monto_original,
                 "monto_usd": round(monto_usd, 2),
@@ -1144,7 +1270,12 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
 
 
 # Marcador de reportes ERP agrupados por producto: filas tipo "Producto: ACURON ..."
-_PROD_HEADER_RE = re.compile(r"^\s*(producto|articulo|art[ií]culo|item|art\.?)\s*:", re.IGNORECASE)
+# Cubre las variantes más comunes de etiqueta de grupo entre distintos ERP.
+_PROD_HEADER_RE = re.compile(
+    r"^\s*(producto|productos|articulo|art[ií]culo|art[ií]culos|art\.?|item|"
+    r"concepto|rubro|mercader[ií]a|insumo|descripci[oó]n|detalle)\s*:",
+    re.IGNORECASE,
+)
 
 
 def _detectar_grupos_producto(df: pd.DataFrame):
