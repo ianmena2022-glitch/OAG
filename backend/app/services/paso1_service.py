@@ -594,9 +594,6 @@ def ejecutar_paso1(
 
     # 2. Procesar TODOS los archivos de bajada de gestión
     all_registros_gestion = []
-    all_dfs_gestion = []       # para exportar bajada normalizada
-    all_mappings_gestion = []  # para exportar bajada normalizada
-    all_tipos_gestion = []     # tipo_inferido por archivo (para normalizar signos NC)
     parser_diagnostico = []
 
     for path_bajada, nombre_archivo in paths_bajada:
@@ -608,9 +605,6 @@ def ejecutar_paso1(
             df_gestion, tc_map, mapping=gestion_mapping, tipo_inferido=tipo_inferido
         )
         all_registros_gestion.extend(registros)
-        all_dfs_gestion.append(df_gestion)
-        all_mappings_gestion.append(gestion_mapping)
-        all_tipos_gestion.append(tipo_inferido)
 
         gestion_warnings = list(gestion_info.get("warnings", []))
         if tipo_inferido:
@@ -661,19 +655,23 @@ def ejecutar_paso1(
     conciliacion = _cruzar_comprobantes(registros_gestion, registros_arca)
 
     # 5. Guardar bajada normalizada consolidada (para Paso 2)
+    #
+    # FUENTE ÚNICA DE VERDAD: la bajada normalizada se construye a partir de los
+    # MISMOS registros limpios (all_registros_gestion: deduplicados, filtrados,
+    # convertidos a USD con la lógica de _procesar_gestion) que se usan para el
+    # total de gestión del Paso 1. De esta forma sum(líneas del Paso 2) es igual,
+    # por construcción, al "Total Facturado Gestión" del Paso 1.
+    #
+    # Cada registro está a nivel LÍNEA (incluye 'articulo' por el forward-fill de
+    # reportes agrupados por producto), que es lo que el Paso 2 necesita para el
+    # análisis por producto. No se agrega por comprobante porque eso perdería el
+    # detalle de productos — pero la SUMA es idéntica a la agregada.
     upload_dir = os.path.join(settings.UPLOAD_DIR, str(expediente_id))
     os.makedirs(upload_dir, exist_ok=True)
     path_normalizada = os.path.join(upload_dir, "bajada_gestion_normalizada.xlsx")
-    if all_dfs_gestion:
-        # Exportar el primero (o concatenar si hay varios)
-        # Estandarizar cada df (forward-fill producto, USD, filtrar totales,
-        # renombrar a nombres estándar) antes de concatenar y exportar
-        dfs_std = [
-            _estandarizar_df_gestion(df, mapping, tc_map, tipo_inferido=ti)
-            for df, mapping, ti in zip(all_dfs_gestion, all_mappings_gestion, all_tipos_gestion)
-        ]
-        df_concat = pd.concat(dfs_std, ignore_index=True)
-        df_concat.to_excel(path_normalizada, index=False)
+    if all_registros_gestion:
+        df_norm = pd.DataFrame(all_registros_gestion)
+        df_norm.to_excel(path_normalizada, index=False)
 
     # 6. Calcular resumen
     solo_arca = [r for r in conciliacion if r["estado"] == "SOLO_ARCA"]
@@ -764,6 +762,18 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
     col_neto      = mapping.get("monto_neto")
     col_total     = mapping.get("monto_total")
     col_total_usd = mapping.get("monto_total_usd")  # columna explícita en USD
+    col_articulo  = mapping.get("articulo")
+
+    # Reportes agrupados por producto ("Producto: X" como cabecera de grupo):
+    # reconstruir el artículo por línea con forward-fill y descartar las cabeceras.
+    # Este es el ÚNICO lugar donde se procesa la gestión → garantiza que el detalle
+    # de productos del Paso 2 use exactamente los mismos registros que el total.
+    _prod_ff, _header_mask = _detectar_grupos_producto(df)
+    if _prod_ff is not None:
+        df = df.copy()
+        df["__articulo__"] = _prod_ff
+        df = df[~_header_mask]
+        col_articulo = "__articulo__"
 
     # Columna de monto a usar: neto > total > total_usd
     # Neto es la base de comparación correcta para auditoría (excluye IVA)
@@ -891,6 +901,7 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
                 "fecha": fecha.strftime("%Y-%m-%d"),
                 "cliente": cliente_raw,
                 "cuit_cliente": str(row.get(col_cuit, "") if col_cuit else ""),
+                "articulo": str(row.get(col_articulo, "") if col_articulo else "").strip(),
                 "moneda": moneda,
                 "monto_original": monto_original,
                 "monto_usd": round(monto_usd, 2),
@@ -1182,96 +1193,3 @@ def _detectar_grupos_producto(df: pd.DataFrame):
     prod = pd.Series(index=df.index, dtype="object")
     prod.loc[mask] = df[mask].apply(_nombre_producto, axis=1)
     return prod.ffill(), mask
-
-
-def _estandarizar_df_gestion(df: pd.DataFrame, mapping: dict, tc_map: dict,
-                             tipo_inferido: str = None) -> pd.DataFrame:
-    """
-    Construye la bajada normalizada a nivel LÍNEA para el Paso 2.
-
-    A diferencia del cruce del Paso 1 (que trabaja a nivel comprobante), el Paso 2
-    necesita el detalle por producto. Esta función:
-      1. Reconstruye el artículo en reportes agrupados por producto (forward-fill).
-      2. Convierte cada línea a USD (neto > total, TC del usuario; sin fecha → 0).
-      3. Aplica el signo de las NC.
-      4. Descarta filas sin fecha (totales / subtotales / resúmenes del ERP).
-      5. Renombra las columnas detectadas a nombres estándar.
-    """
-    mapping = mapping or {}
-    col_cliente = mapping.get("cliente")
-    col_articulo = mapping.get("articulo")
-    col_fecha   = mapping.get("fecha")
-    col_total   = mapping.get("monto_total")
-    col_neto    = mapping.get("monto_neto")
-    col_moneda  = mapping.get("moneda")
-    col_tc      = mapping.get("tipo_cambio")
-    col_tipo    = mapping.get("tipo_comprobante")
-    # Para auditoría se usa el neto (sin IVA); si no hay, el total
-    col_monto = col_neto or col_total
-
-    df_out = df.copy()
-
-    # ── 1. Reporte agrupado por producto → forward-fill del artículo ──
-    prod_ff, header_mask = _detectar_grupos_producto(df_out)
-    if prod_ff is not None:
-        df_out["__articulo_std__"] = prod_ff
-        df_out = df_out[~header_mask]          # descartar filas cabecera "Producto:"
-        col_articulo = "__articulo_std__"
-
-    # ── 2. monto_usd por línea (sin fecha → 0, nunca ARS sin convertir) ──
-    def calc_usd(row):
-        fecha = pd.to_datetime(row.get(col_fecha) if col_fecha else None, errors="coerce")
-        if pd.isna(fecha):
-            return 0.0
-        moneda = str(row.get(col_moneda, "ARS") if col_moneda else "ARS").upper()
-        monto = normalizar_monto(row.get(col_monto) if col_monto else 0)
-        if moneda in ("USD", "U$S", "DOLAR", "DÓLAR", "DOL"):
-            return monto
-        tc = normalizar_monto(row.get(col_tc) if col_tc else 0)
-        if tc <= 1:
-            tc = obtener_tipo_cambio_fecha(tc_map, fecha.date(), moneda)
-        return round(monto / tc, 2) if tc and tc > 1 else 0.0
-
-    df_out["monto_usd"] = df_out.apply(calc_usd, axis=1)
-
-    # ── 3. signo NC (columna tipo > tipo inferido del título > FC) ──
-    def aplicar_signo(row):
-        if col_tipo:
-            tipo = normalizar_tipo_comprobante(row.get(col_tipo))
-        elif tipo_inferido:
-            tipo = tipo_inferido
-        else:
-            tipo = "FC"
-        val = row["monto_usd"]
-        return -abs(val) if tipo == "NC" else abs(val)
-
-    df_out["monto_usd"] = df_out.apply(aplicar_signo, axis=1)
-
-    # ── 4. descartar filas sin fecha (totales/subtotales/resúmenes) ──
-    if col_fecha:
-        fechas = pd.to_datetime(df_out[col_fecha], errors="coerce")
-        df_out = df_out[fechas.notna()]
-
-    # ── 5. renombrar columnas originales → nombres estándar ──
-    rename_map = {
-        orig: std for std, orig in mapping.items()
-        if orig and orig in df_out.columns and std != "articulo"
-    }
-    df_out = df_out.rename(columns=rename_map)
-
-    # Columna 'articulo' estándar (manejada aparte por el forward-fill)
-    if col_articulo == "__articulo_std__":
-        orig_art = mapping.get("articulo")
-        if orig_art and orig_art in df_out.columns:
-            df_out = df_out.drop(columns=[orig_art])
-        df_out = df_out.rename(columns={"__articulo_std__": "articulo"})
-    elif mapping.get("articulo") and mapping["articulo"] in df_out.columns:
-        df_out = df_out.rename(columns={mapping["articulo"]: "articulo"})
-
-    return df_out
-
-
-def _exportar_bajada_normalizada(df_norm: pd.DataFrame, tc_map: dict, path: str, mapping: dict = None):
-    """Exporta la bajada de gestión normalizada con columnas estándar y montos en USD."""
-    df_export = _estandarizar_df_gestion(df_norm, mapping or {}, tc_map)
-    df_export.to_excel(path, index=False)

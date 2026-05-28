@@ -331,8 +331,8 @@ def _tabla_apertura(df_agro: pd.DataFrame, clasificacion_map: dict, anio: int) -
     if df_agro.empty:
         return []
 
-    # monto_usd ya es el neto convertido a USD (lo calcula _estandarizar_df_gestion).
-    # No usar monto_neto crudo: ese está en ARS.
+    # monto_usd ya es el neto convertido a USD (lo calcula el Paso 1 al construir
+    # la bajada normalizada). No usar monto_neto crudo: ese estaría en ARS.
     df_agro = df_agro.copy()
     df_agro["monto_apertura"] = pd.to_numeric(df_agro["monto_usd"], errors="coerce").fillna(0)
 
