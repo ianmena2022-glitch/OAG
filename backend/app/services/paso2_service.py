@@ -331,15 +331,10 @@ def _tabla_apertura(df_agro: pd.DataFrame, clasificacion_map: dict, anio: int) -
     if df_agro.empty:
         return []
 
-    # Usar monto neto si existe, sino total
-    col_monto = "monto_neto" if "monto_neto" in df_agro.columns else "monto_usd"
-    if col_monto == "monto_neto":
-        # Convertir monto_neto a USD si no está ya
-        df_agro = df_agro.copy()
-        df_agro["monto_apertura"] = pd.to_numeric(df_agro["monto_neto"], errors="coerce").fillna(0)
-    else:
-        df_agro = df_agro.copy()
-        df_agro["monto_apertura"] = df_agro["monto_usd"]
+    # monto_usd ya es el neto convertido a USD (lo calcula _estandarizar_df_gestion).
+    # No usar monto_neto crudo: ese está en ARS.
+    df_agro = df_agro.copy()
+    df_agro["monto_apertura"] = pd.to_numeric(df_agro["monto_usd"], errors="coerce").fillna(0)
 
     pivot = df_agro.pivot_table(
         index="articulo",

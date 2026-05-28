@@ -183,7 +183,7 @@ GESTION_SCHEMA = {
         "denominacion articulo", "denominación artículo", "denominacion producto",
         "artículo", "articulo", "producto",
         "descripcion", "descripción", "detalle", "concepto", "item",
-        "description", "product", "name",
+        "description", "product",
     ],
     "tipo_comprobante": [
         "tipo de comprobante", "tipo comprobante", "tipo documento", "tipo doc",
@@ -596,6 +596,7 @@ def ejecutar_paso1(
     all_registros_gestion = []
     all_dfs_gestion = []       # para exportar bajada normalizada
     all_mappings_gestion = []  # para exportar bajada normalizada
+    all_tipos_gestion = []     # tipo_inferido por archivo (para normalizar signos NC)
     parser_diagnostico = []
 
     for path_bajada, nombre_archivo in paths_bajada:
@@ -609,6 +610,7 @@ def ejecutar_paso1(
         all_registros_gestion.extend(registros)
         all_dfs_gestion.append(df_gestion)
         all_mappings_gestion.append(gestion_mapping)
+        all_tipos_gestion.append(tipo_inferido)
 
         gestion_warnings = list(gestion_info.get("warnings", []))
         if tipo_inferido:
@@ -664,10 +666,11 @@ def ejecutar_paso1(
     path_normalizada = os.path.join(upload_dir, "bajada_gestion_normalizada.xlsx")
     if all_dfs_gestion:
         # Exportar el primero (o concatenar si hay varios)
-        # Estandarizar cada df (renombrar cols originales → nombres std) antes de exportar
+        # Estandarizar cada df (forward-fill producto, USD, filtrar totales,
+        # renombrar a nombres estándar) antes de concatenar y exportar
         dfs_std = [
-            _estandarizar_df_gestion(df, mapping, tc_map)
-            for df, mapping in zip(all_dfs_gestion, all_mappings_gestion)
+            _estandarizar_df_gestion(df, mapping, tc_map, tipo_inferido=ti)
+            for df, mapping, ti in zip(all_dfs_gestion, all_mappings_gestion, all_tipos_gestion)
         ]
         df_concat = pd.concat(dfs_std, ignore_index=True)
         df_concat.to_excel(path_normalizada, index=False)
@@ -1129,49 +1132,141 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
     return conciliacion
 
 
-def _estandarizar_df_gestion(df: pd.DataFrame, mapping: dict, tc_map: dict) -> pd.DataFrame:
+# Marcador de reportes ERP agrupados por producto: filas tipo "Producto: ACURON ..."
+_PROD_HEADER_RE = re.compile(r"^\s*(producto|articulo|art[ií]culo|item|art\.?)\s*:", re.IGNORECASE)
+
+
+def _detectar_grupos_producto(df: pd.DataFrame):
     """
-    Dado un DataFrame con columnas originales del ERP y su mapping {std_name: orig_col},
-    calcula monto_usd, aplica signo NC y renombra todas las columnas detectadas
-    a sus nombres estándar. Devuelve un DataFrame con columnas estándar.
+    Detecta reportes ERP agrupados POR PRODUCTO (caso típico de "Listado de
+    Facturas por Producto" de Tango y similares): el nombre del producto aparece
+    en una fila marcador "Producto: X" y las filas de detalle debajo (con cliente,
+    montos y fecha) tienen el artículo vacío.
+
+    Estrategia general (independiente del mapping, basada en contenido):
+      1. Buscar la columna que contiene los marcadores "Producto:" / "Artículo:".
+      2. Extraer el nombre del producto (texto tras ':' o la primera celda no vacía
+         a la derecha del marcador).
+      3. Forward-fill el producto hacia las filas de detalle.
+
+    Retorna (serie_articulo_ffill, mask_filas_cabecera) o (None, None) si el
+    archivo no tiene esta estructura.
+    """
+    marker_col = None
+    mask = None
+    for c in df.columns:
+        s = df[c].astype(str)
+        m = s.str.match(_PROD_HEADER_RE)
+        if m.sum() >= 2:
+            marker_col, mask = c, m
+            break
+    if marker_col is None:
+        return None, None
+
+    cols = list(df.columns)
+    mi = cols.index(marker_col)
+
+    def _nombre_producto(row):
+        cell = str(row[marker_col])
+        mt = _PROD_HEADER_RE.match(cell)
+        after = cell[mt.end():].strip(" :") if mt else ""
+        if after:
+            return after
+        # nombre en una columna a la derecha del marcador
+        for c in cols[mi + 1:]:
+            v = row[c]
+            if pd.notna(v) and str(v).strip() and str(v).strip().lower() not in ("nan", "none"):
+                return str(v).strip()
+        return None
+
+    prod = pd.Series(index=df.index, dtype="object")
+    prod.loc[mask] = df[mask].apply(_nombre_producto, axis=1)
+    return prod.ffill(), mask
+
+
+def _estandarizar_df_gestion(df: pd.DataFrame, mapping: dict, tc_map: dict,
+                             tipo_inferido: str = None) -> pd.DataFrame:
+    """
+    Construye la bajada normalizada a nivel LÍNEA para el Paso 2.
+
+    A diferencia del cruce del Paso 1 (que trabaja a nivel comprobante), el Paso 2
+    necesita el detalle por producto. Esta función:
+      1. Reconstruye el artículo en reportes agrupados por producto (forward-fill).
+      2. Convierte cada línea a USD (neto > total, TC del usuario; sin fecha → 0).
+      3. Aplica el signo de las NC.
+      4. Descarta filas sin fecha (totales / subtotales / resúmenes del ERP).
+      5. Renombra las columnas detectadas a nombres estándar.
     """
     mapping = mapping or {}
-    col_moneda = mapping.get("moneda")
-    col_fecha  = mapping.get("fecha")
-    col_tc     = mapping.get("tipo_cambio")
-    col_total  = mapping.get("monto_total")
-    col_tipo   = mapping.get("tipo_comprobante")
+    col_cliente = mapping.get("cliente")
+    col_articulo = mapping.get("articulo")
+    col_fecha   = mapping.get("fecha")
+    col_total   = mapping.get("monto_total")
+    col_neto    = mapping.get("monto_neto")
+    col_moneda  = mapping.get("moneda")
+    col_tc      = mapping.get("tipo_cambio")
+    col_tipo    = mapping.get("tipo_comprobante")
+    # Para auditoría se usa el neto (sin IVA); si no hay, el total
+    col_monto = col_neto or col_total
 
     df_out = df.copy()
 
-    # Calcular monto_usd con TC del usuario
+    # ── 1. Reporte agrupado por producto → forward-fill del artículo ──
+    prod_ff, header_mask = _detectar_grupos_producto(df_out)
+    if prod_ff is not None:
+        df_out["__articulo_std__"] = prod_ff
+        df_out = df_out[~header_mask]          # descartar filas cabecera "Producto:"
+        col_articulo = "__articulo_std__"
+
+    # ── 2. monto_usd por línea (sin fecha → 0, nunca ARS sin convertir) ──
     def calc_usd(row):
-        moneda = str(row.get(col_moneda, "ARS") if col_moneda else "ARS").upper()
-        if moneda in ("USD", "U$S", "DOLAR", "DÓLAR"):
-            return normalizar_monto(row.get(col_total) if col_total else 0)
         fecha = pd.to_datetime(row.get(col_fecha) if col_fecha else None, errors="coerce")
-        monto = normalizar_monto(row.get(col_total) if col_total else 0)
         if pd.isna(fecha):
+            return 0.0
+        moneda = str(row.get(col_moneda, "ARS") if col_moneda else "ARS").upper()
+        monto = normalizar_monto(row.get(col_monto) if col_monto else 0)
+        if moneda in ("USD", "U$S", "DOLAR", "DÓLAR", "DOL"):
             return monto
-        tc = normalizar_monto(row.get(col_tc) if col_tc else 0) or obtener_tipo_cambio_fecha(
-            tc_map, fecha.date(), moneda
-        )
-        return round(monto / tc, 2) if tc else 0
+        tc = normalizar_monto(row.get(col_tc) if col_tc else 0)
+        if tc <= 1:
+            tc = obtener_tipo_cambio_fecha(tc_map, fecha.date(), moneda)
+        return round(monto / tc, 2) if tc and tc > 1 else 0.0
 
     df_out["monto_usd"] = df_out.apply(calc_usd, axis=1)
 
-    # Aplicar signo NC
+    # ── 3. signo NC (columna tipo > tipo inferido del título > FC) ──
     def aplicar_signo(row):
-        tipo = normalizar_tipo_comprobante(row.get(col_tipo) if col_tipo else None)
+        if col_tipo:
+            tipo = normalizar_tipo_comprobante(row.get(col_tipo))
+        elif tipo_inferido:
+            tipo = tipo_inferido
+        else:
+            tipo = "FC"
         val = row["monto_usd"]
         return -abs(val) if tipo == "NC" else abs(val)
 
     df_out["monto_usd"] = df_out.apply(aplicar_signo, axis=1)
 
-    # Renombrar columnas originales → nombres estándar
-    # mapping = {std_name: orig_col} → rename orig_col → std_name
-    rename_map = {orig: std for std, orig in mapping.items() if orig and orig in df_out.columns}
+    # ── 4. descartar filas sin fecha (totales/subtotales/resúmenes) ──
+    if col_fecha:
+        fechas = pd.to_datetime(df_out[col_fecha], errors="coerce")
+        df_out = df_out[fechas.notna()]
+
+    # ── 5. renombrar columnas originales → nombres estándar ──
+    rename_map = {
+        orig: std for std, orig in mapping.items()
+        if orig and orig in df_out.columns and std != "articulo"
+    }
     df_out = df_out.rename(columns=rename_map)
+
+    # Columna 'articulo' estándar (manejada aparte por el forward-fill)
+    if col_articulo == "__articulo_std__":
+        orig_art = mapping.get("articulo")
+        if orig_art and orig_art in df_out.columns:
+            df_out = df_out.drop(columns=[orig_art])
+        df_out = df_out.rename(columns={"__articulo_std__": "articulo"})
+    elif mapping.get("articulo") and mapping["articulo"] in df_out.columns:
+        df_out = df_out.rename(columns={mapping["articulo"]: "articulo"})
 
     return df_out
 
