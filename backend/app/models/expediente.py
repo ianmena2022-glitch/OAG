@@ -119,3 +119,38 @@ class Glosario(Base):
     nombre_estandar = Column(String(500), nullable=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AnotacionConciliacion(Base):
+    """
+    Anotaciones manuales del auditor sobre comprobantes de la conciliación.
+    Una por (expediente, paso, comprobante_key). Persiste entre sesiones.
+
+    Uso principal: completar datos faltantes en SOLO_ARCA (gestión no encontró
+    el comprobante) y clasificar si es o no agroquímico para el Paso 2.
+    """
+    __tablename__ = "anotaciones_conciliacion"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    expediente_id = Column(Integer, ForeignKey("expedientes.id", ondelete="CASCADE"), nullable=False, index=True)
+    paso          = Column(Integer, nullable=False, default=1)
+    # Clave del comprobante en la conciliación, ej: "FC-00001-00000034"
+    comprobante_key = Column(String(100), nullable=False)
+
+    # Datos del comprobante (readonly desde ARCA, completables manualmente)
+    tipo    = Column(String(10), nullable=True)
+    numero  = Column(String(30), nullable=True)
+    fecha   = Column(String(20), nullable=True)
+
+    # Datos de Gestión ingresados manualmente
+    cliente          = Column(String(500), nullable=True)
+    monto_gestion_usd = Column(Float, nullable=True)
+
+    # Clasificación agroquímico
+    es_agroquimico = Column(Boolean, nullable=True)   # None = sin responder
+    producto       = Column(String(500), nullable=True)
+    cantidad       = Column(Float, nullable=True)
+    unidad         = Column(String(50), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

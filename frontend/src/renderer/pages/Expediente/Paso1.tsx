@@ -5,9 +5,10 @@ import { useNotificationStore } from '../../store'
 import { formatUSD } from '../../lib/utils'
 import FileUpload from '../../components/FileUpload'
 import DataTable, { Column } from '../../components/DataTable'
-import { Play, Loader, Info, Plus, Trash2, FileText, AlertTriangle } from 'lucide-react'
+import { Play, Loader, Info, Plus, Trash2, FileText, AlertTriangle, Pencil } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import PasoFeedback from '../../components/PasoFeedback'
+import EditAnotacionModal from '../../components/EditAnotacionModal'
 
 interface Props { expediente: any }
 
@@ -16,6 +17,7 @@ const ESTADO_COLORS: Record<string, string> = {
   DIFERENCIA: 'text-yellow-700 bg-yellow-50',
   SOLO_ARCA: 'text-red-700 bg-red-50',
   SOLO_GESTION: 'text-orange-700 bg-orange-50',
+  MANUAL: 'text-blue-700 bg-blue-50',
 }
 
 function formatSize(bytes?: number) {
@@ -30,6 +32,7 @@ export default function Paso1({ expediente }: Props) {
   const [uploading, setUploading] = useState<Record<string, boolean>>({})
   const [erpUploading, setErpUploading] = useState(0)   // contador de uploads ERP en curso
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [editingRow, setEditingRow] = useState<any | null>(null)
 
   const archivos = expediente.archivos || []
   const getArchivo = (tipo: string) => archivos.find((a: any) => a.tipo === tipo)
@@ -128,10 +131,30 @@ export default function Paso1({ expediente }: Props) {
         </span>
       ),
     },
+    {
+      key: '_edit', label: '', width: '40px', align: 'center',
+      render: (_v: any, row: any) => (
+        <button
+          type="button"
+          onClick={() => setEditingRow(row)}
+          title="Editar anotación"
+          className="w-7 h-7 flex items-center justify-center rounded bg-oag-blue text-white hover:bg-oag-blue/80 transition-colors flex-shrink-0"
+        >
+          <Pencil size={12} />
+        </button>
+      ),
+    },
   ]
 
   return (
     <div className="space-y-5">
+      {editingRow && (
+        <EditAnotacionModal
+          expedienteId={expediente.id}
+          row={editingRow}
+          onClose={() => setEditingRow(null)}
+        />
+      )}
       {/* Header */}
       <div>
         <h2 className="text-base font-semibold text-oag-text">Paso 1 — Cruce de Base de Datos</h2>
@@ -365,7 +388,8 @@ export default function Paso1({ expediente }: Props) {
               rowClassName={(row) =>
                 row.estado === 'DIFERENCIA' ? 'bg-yellow-50/60' :
                 row.estado === 'SOLO_ARCA' ? 'bg-red-50/40' :
-                row.estado === 'SOLO_GESTION' ? 'bg-orange-50/40' : ''
+                row.estado === 'SOLO_GESTION' ? 'bg-orange-50/40' :
+                row.estado === 'MANUAL' ? 'bg-blue-50/40' : ''
               }
             />
           </div>

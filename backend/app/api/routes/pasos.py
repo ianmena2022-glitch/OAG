@@ -5,15 +5,16 @@ import os
 import json
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from ...core.database import get_db
 from ...core.deps import get_current_user
 from ...models.user import User
 from ...models.expediente import (
     Expediente, Archivo, ResultadoPaso, MaestroSyngenta, Glosario,
-    TipoArchivo, EstadoExpediente
+    AnotacionConciliacion, TipoArchivo, EstadoExpediente
 )
 from ...services import paso1_service, paso2_service, paso3_service
 from ...services import paso4_service, paso5_service, paso6_service
@@ -146,7 +147,123 @@ def resultado_paso1(
     ).all()
     if not res:
         raise HTTPException(404, "Paso 1 no ejecutado aún")
-    return {r.subtipo: r.datos for r in res}
+
+    datos = {r.subtipo: r.datos for r in res}
+
+    # Mergear anotaciones manuales en la conciliación
+    anotaciones = db.query(AnotacionConciliacion).filter(
+        AnotacionConciliacion.expediente_id == exp_id,
+        AnotacionConciliacion.paso == 1,
+    ).all()
+
+    if anotaciones and datos.get("conciliacion"):
+        anot_idx = {a.comprobante_key: a for a in anotaciones}
+        conciliacion = datos["conciliacion"]
+        for row in conciliacion:
+            key = row.get("key")
+            if key and key in anot_idx:
+                a = anot_idx[key]
+                # Aplicar campos editados
+                if a.cliente is not None:
+                    row["cliente"] = a.cliente
+                if a.monto_gestion_usd is not None:
+                    row["monto_usd_gestion"] = a.monto_gestion_usd
+                    row["diferencia_usd"] = round(
+                        a.monto_gestion_usd - (row.get("monto_usd_arca") or 0), 2
+                    )
+                # Estado: MANUAL si había monto_gestion o es_agroquimico respondido
+                row["estado"] = "MANUAL"
+                # Datos de anotación para el frontend
+                row["anotacion"] = {
+                    "es_agroquimico": a.es_agroquimico,
+                    "producto": a.producto,
+                    "cantidad": a.cantidad,
+                    "unidad": a.unidad,
+                    "cliente": a.cliente,
+                    "monto_gestion_usd": a.monto_gestion_usd,
+                }
+        datos["conciliacion"] = conciliacion
+
+    return datos
+
+
+# ── Schema y endpoint de anotaciones ──────────────────────────────────────────
+
+class AnotacionPayload(BaseModel):
+    tipo: Optional[str] = None
+    numero: Optional[str] = None
+    fecha: Optional[str] = None
+    cliente: Optional[str] = None
+    monto_gestion_usd: Optional[float] = None
+    es_agroquimico: Optional[bool] = None
+    producto: Optional[str] = None
+    cantidad: Optional[float] = None
+    unidad: Optional[str] = None
+
+
+@router.put("/1/anotaciones/{key:path}")
+def guardar_anotacion(
+    exp_id: int,
+    key: str,
+    payload: AnotacionPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Crea o actualiza la anotación manual de un comprobante de la conciliación."""
+    _get_exp(exp_id, db, current_user)
+
+    anot = db.query(AnotacionConciliacion).filter(
+        AnotacionConciliacion.expediente_id == exp_id,
+        AnotacionConciliacion.paso == 1,
+        AnotacionConciliacion.comprobante_key == key,
+    ).first()
+
+    if anot is None:
+        anot = AnotacionConciliacion(
+            expediente_id=exp_id,
+            paso=1,
+            comprobante_key=key,
+        )
+        db.add(anot)
+
+    # Actualizar campos provistos
+    for field in ("tipo", "numero", "fecha", "cliente", "monto_gestion_usd",
+                  "es_agroquimico", "producto", "cantidad", "unidad"):
+        val = getattr(payload, field)
+        if val is not None:
+            setattr(anot, field, val)
+
+    db.commit()
+    db.refresh(anot)
+    return {"ok": True, "key": key}
+
+
+@router.get("/1/anotaciones")
+def listar_anotaciones(
+    exp_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_exp(exp_id, db, current_user)
+    anotaciones = db.query(AnotacionConciliacion).filter(
+        AnotacionConciliacion.expediente_id == exp_id,
+        AnotacionConciliacion.paso == 1,
+    ).all()
+    return [
+        {
+            "key": a.comprobante_key,
+            "tipo": a.tipo,
+            "numero": a.numero,
+            "fecha": a.fecha,
+            "cliente": a.cliente,
+            "monto_gestion_usd": a.monto_gestion_usd,
+            "es_agroquimico": a.es_agroquimico,
+            "producto": a.producto,
+            "cantidad": a.cantidad,
+            "unidad": a.unidad,
+        }
+        for a in anotaciones
+    ]
 
 
 # ── PASO 2 ────────────────────────────────────────────────────────────────────

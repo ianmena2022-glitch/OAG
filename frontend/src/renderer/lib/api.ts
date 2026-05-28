@@ -85,6 +85,19 @@ export const pasosAPI = {
     api.get(`/api/expedientes/${expId}/pasos/${paso}/descargar`, { responseType: 'blob' }),
 }
 
+// ── Anotaciones de Conciliación ───────────────────────────────────────────────
+
+export const anotacionesAPI = {
+  guardar: (expId: number, key: string, data: {
+    tipo?: string; numero?: string; fecha?: string
+    cliente?: string; monto_gestion_usd?: number
+    es_agroquimico?: boolean; producto?: string
+    cantidad?: number; unidad?: string
+  }) => api.put(`/api/expedientes/${expId}/pasos/1/anotaciones/${encodeURIComponent(key)}`, data),
+  listar: (expId: number) =>
+    api.get(`/api/expedientes/${expId}/pasos/1/anotaciones`),
+}
+
 // ── Admin ─────────────────────────────────────────────────────────────────────
 
 export const adminAPI = {
