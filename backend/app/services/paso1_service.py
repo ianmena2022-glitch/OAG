@@ -646,14 +646,13 @@ def ejecutar_paso1(
     path_normalizada = os.path.join(upload_dir, "bajada_gestion_normalizada.xlsx")
     if all_dfs_gestion:
         # Exportar el primero (o concatenar si hay varios)
-        if len(all_dfs_gestion) == 1:
-            _exportar_bajada_normalizada(
-                all_dfs_gestion[0], tc_map, path_normalizada, mapping=all_mappings_gestion[0]
-            )
-        else:
-            # Para múltiples archivos: concatenar y exportar
-            df_concat = pd.concat(all_dfs_gestion, ignore_index=True)
-            df_concat.to_excel(path_normalizada, index=False)
+        # Estandarizar cada df (renombrar cols originales → nombres std) antes de exportar
+        dfs_std = [
+            _estandarizar_df_gestion(df, mapping, tc_map)
+            for df, mapping in zip(all_dfs_gestion, all_mappings_gestion)
+        ]
+        df_concat = pd.concat(dfs_std, ignore_index=True)
+        df_concat.to_excel(path_normalizada, index=False)
 
     # 6. Calcular resumen
     solo_arca = [r for r in conciliacion if r["estado"] == "SOLO_ARCA"]
@@ -1112,8 +1111,12 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
     return conciliacion
 
 
-def _exportar_bajada_normalizada(df_norm: pd.DataFrame, tc_map: dict, path: str, mapping: dict = None):
-    """Exporta la bajada de gestión normalizada con montos en USD calculados."""
+def _estandarizar_df_gestion(df: pd.DataFrame, mapping: dict, tc_map: dict) -> pd.DataFrame:
+    """
+    Dado un DataFrame con columnas originales del ERP y su mapping {std_name: orig_col},
+    calcula monto_usd, aplica signo NC y renombra todas las columnas detectadas
+    a sus nombres estándar. Devuelve un DataFrame con columnas estándar.
+    """
     mapping = mapping or {}
     col_moneda = mapping.get("moneda")
     col_fecha  = mapping.get("fecha")
@@ -1121,9 +1124,9 @@ def _exportar_bajada_normalizada(df_norm: pd.DataFrame, tc_map: dict, path: str,
     col_total  = mapping.get("monto_total")
     col_tipo   = mapping.get("tipo_comprobante")
 
-    df_export = df_norm.copy()
+    df_out = df.copy()
 
-    # Calcular montos USD usando las columnas originales del ERP
+    # Calcular monto_usd con TC del usuario
     def calc_usd(row):
         moneda = str(row.get(col_moneda, "ARS") if col_moneda else "ARS").upper()
         if moneda in ("USD", "U$S", "DOLAR", "DÓLAR"):
@@ -1137,16 +1140,25 @@ def _exportar_bajada_normalizada(df_norm: pd.DataFrame, tc_map: dict, path: str,
         )
         return round(monto / tc, 2) if tc else 0
 
-    df_export["monto_usd"] = df_export.apply(calc_usd, axis=1)
+    df_out["monto_usd"] = df_out.apply(calc_usd, axis=1)
 
     # Aplicar signo NC
     def aplicar_signo(row):
         tipo = normalizar_tipo_comprobante(row.get(col_tipo) if col_tipo else None)
         val = row["monto_usd"]
-        if tipo == "NC":
-            return -abs(val)
-        return abs(val)
+        return -abs(val) if tipo == "NC" else abs(val)
 
-    df_export["monto_usd"] = df_export.apply(aplicar_signo, axis=1)
+    df_out["monto_usd"] = df_out.apply(aplicar_signo, axis=1)
 
+    # Renombrar columnas originales → nombres estándar
+    # mapping = {std_name: orig_col} → rename orig_col → std_name
+    rename_map = {orig: std for std, orig in mapping.items() if orig and orig in df_out.columns}
+    df_out = df_out.rename(columns=rename_map)
+
+    return df_out
+
+
+def _exportar_bajada_normalizada(df_norm: pd.DataFrame, tc_map: dict, path: str, mapping: dict = None):
+    """Exporta la bajada de gestión normalizada con columnas estándar y montos en USD."""
+    df_export = _estandarizar_df_gestion(df_norm, mapping or {}, tc_map)
     df_export.to_excel(path, index=False)

@@ -86,14 +86,74 @@ def ejecutar_paso2(
 
 
 def _preparar_df(df: pd.DataFrame, anio: int) -> pd.DataFrame:
-    """Normaliza tipos y filtra por año."""
+    """Normaliza tipos y filtra por año. Tolera nombres de columna variables."""
     df = df.copy()
-    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+
+    # ── fecha ── buscar columna con nombre estándar o variantes comunes
+    col_fecha = next(
+        (c for c in df.columns if str(c).strip().lower() in ("fecha", "date", "fecha_emision", "fecha emision")),
+        None
+    )
+    if col_fecha is None:
+        raise KeyError(
+            f"No se encontró columna 'fecha' en la bajada normalizada. "
+            f"Columnas disponibles: {list(df.columns)}. "
+            "Re-ejecutá el Paso 1 para regenerar el archivo normalizado."
+        )
+    df["fecha"] = pd.to_datetime(df[col_fecha], errors="coerce")
     df = df[df["fecha"].dt.year == anio] if anio else df
-    df["monto_usd"] = pd.to_numeric(df.get("monto_usd", df.get("monto_total", 0)), errors="coerce").fillna(0)
     df["mes"] = df["fecha"].dt.month
-    df["articulo"] = df["articulo"].fillna("SIN DESCRIPCIÓN").astype(str).str.strip().str.upper()
-    df["cliente"] = df["cliente"].fillna("SIN NOMBRE").astype(str).str.strip().str.upper()
+
+    # ── monto_usd ──
+    if "monto_usd" in df.columns:
+        df["monto_usd"] = pd.to_numeric(df["monto_usd"], errors="coerce").fillna(0)
+    elif "monto_total" in df.columns:
+        df["monto_usd"] = pd.to_numeric(df["monto_total"], errors="coerce").fillna(0)
+    else:
+        df["monto_usd"] = 0.0
+
+    # ── articulo ── buscar variantes
+    col_art = next(
+        (c for c in df.columns if str(c).strip().lower() in (
+            "articulo", "artículo", "producto", "descripcion", "descripción",
+            "description", "item", "detalle"
+        )),
+        None
+    )
+    df["articulo"] = (
+        df[col_art].fillna("SIN DESCRIPCIÓN").astype(str).str.strip().str.upper()
+        if col_art else "SIN DESCRIPCIÓN"
+    )
+
+    # ── cliente ──
+    col_cli = next(
+        (c for c in df.columns if str(c).strip().lower() in (
+            "cliente", "razon_social", "razon social", "client", "nombre_cliente",
+            "nombre cliente", "denominacion", "denominación"
+        )),
+        None
+    )
+    df["cliente"] = (
+        df[col_cli].fillna("SIN NOMBRE").astype(str).str.strip().str.upper()
+        if col_cli else "SIN NOMBRE"
+    )
+
+    # ── numero/tipo comprobante ── (opcionales, usados en muestreo)
+    col_nro = next(
+        (c for c in df.columns if str(c).strip().lower() in (
+            "numero_comprobante", "numero comprobante", "nro", "nro.", "numero", "número"
+        )), None
+    )
+    col_tipo = next(
+        (c for c in df.columns if str(c).strip().lower() in (
+            "tipo_comprobante", "tipo comprobante", "tipo", "type"
+        )), None
+    )
+    if col_nro and "numero_comprobante" not in df.columns:
+        df["numero_comprobante"] = df[col_nro].astype(str)
+    if col_tipo and "tipo_comprobante" not in df.columns:
+        df["tipo_comprobante"] = df[col_tipo].astype(str)
+
     return df
 
 
