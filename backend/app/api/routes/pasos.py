@@ -134,6 +134,54 @@ def ejecutar_paso1(
     }
 
 
+def _recalcular_resumen(conciliacion: list, resumen_original: dict) -> dict:
+    """Recalcula el resumen desde las filas de conciliación actuales (post-anotaciones)."""
+    total_arca      = sum(1 for r in conciliacion if (r.get("monto_usd_arca")     or 0) != 0)
+    total_gestion   = sum(1 for r in conciliacion if (r.get("monto_usd_gestion")  or 0) != 0)
+    solo_arca       = sum(1 for r in conciliacion if r.get("estado") == "SOLO_ARCA")
+    solo_gestion    = sum(1 for r in conciliacion if r.get("estado") == "SOLO_GESTION")
+    # OK: diferencia ≤ 1 USD y no es SOLO_*
+    ok              = sum(1 for r in conciliacion
+                         if r.get("estado") not in ("SOLO_ARCA", "SOLO_GESTION")
+                         and abs(r.get("diferencia_usd") or 0) <= 1)
+    con_diferencia  = sum(1 for r in conciliacion
+                         if r.get("estado") not in ("SOLO_ARCA", "SOLO_GESTION")
+                         and abs(r.get("diferencia_usd") or 0) > 1)
+    monto_arca      = round(sum(r.get("monto_usd_arca")    or 0 for r in conciliacion), 2)
+    monto_gestion   = round(sum(r.get("monto_usd_gestion") or 0 for r in conciliacion), 2)
+
+    return {
+        **resumen_original,          # conserva archivos_gestion, nombre_distribuidor, etc.
+        "total_arca":               total_arca,
+        "total_gestion":            total_gestion,
+        "ok":                       ok,
+        "con_diferencia":           con_diferencia,
+        "solo_arca":                solo_arca,
+        "solo_gestion":             solo_gestion,
+        "monto_total_arca_usd":     monto_arca,
+        "monto_total_gestion_usd":  monto_gestion,
+    }
+
+
+def _recalcular_alertas(conciliacion: list) -> list:
+    """Regenera las alertas estructurales desde el estado actual de la conciliación."""
+    alertas = []
+    solo_g = [r for r in conciliacion if r.get("estado") == "SOLO_GESTION"]
+    if solo_g:
+        monto = sum(r.get("monto_usd_gestion") or 0 for r in solo_g)
+        ejemplos = ", ".join(r.get("numero", "") for r in solo_g[:3])
+        alertas.append({
+            "nivel": "error",
+            "titulo": f"{len(solo_g)} comprobante(s) en Gestión sin registro en ARCA",
+            "detalle": (
+                f"Monto total: US$ {monto:,.2f}. "
+                f"Ejemplos: {ejemplos}. "
+                "Esto no debería ocurrir: verificá que el archivo ARCA cubra el mismo período."
+            ),
+        })
+    return alertas
+
+
 @router.get("/1/resultado")
 def resultado_paso1(
     exp_id: int,
@@ -156,9 +204,10 @@ def resultado_paso1(
         AnotacionConciliacion.paso == 1,
     ).all()
 
-    if anotaciones and datos.get("conciliacion"):
+    conciliacion = datos.get("conciliacion") or []
+
+    if anotaciones and conciliacion:
         anot_idx = {a.comprobante_key: a for a in anotaciones}
-        conciliacion = datos["conciliacion"]
         for row in conciliacion:
             key = row.get("key")
             if key and key in anot_idx:
@@ -171,7 +220,7 @@ def resultado_paso1(
                     row["diferencia_usd"] = round(
                         a.monto_gestion_usd - (row.get("monto_usd_arca") or 0), 2
                     )
-                # Estado: MANUAL si había monto_gestion o es_agroquimico respondido
+                # Estado: MANUAL
                 row["estado"] = "MANUAL"
                 # Datos de anotación para el frontend
                 row["anotacion"] = {
@@ -183,6 +232,10 @@ def resultado_paso1(
                     "monto_gestion_usd": a.monto_gestion_usd,
                 }
         datos["conciliacion"] = conciliacion
+
+    # Siempre recalcular resumen y alertas desde las filas actuales
+    datos["resumen"] = _recalcular_resumen(conciliacion, datos.get("resumen") or {})
+    datos["alertas"] = _recalcular_alertas(conciliacion)
 
     return datos
 
