@@ -15,6 +15,7 @@ export default function Paso3({ expediente }: Props) {
   const qc = useQueryClient()
   const { push } = useNotificationStore()
   const [uploading, setUploading] = React.useState(false)
+  const [ran, setRan] = React.useState(false)
 
   const archivos = expediente.archivos || []
   const getArchivo = (tipo: string) => archivos.find((a: any) => a.tipo === tipo)
@@ -32,13 +33,14 @@ export default function Paso3({ expediente }: Props) {
   const { data: resultado } = useQuery({
     queryKey: ['paso3', expediente.id],
     queryFn: () => pasosAPI.resultadoPaso(expediente.id, 3).then((r) => r.data),
-    enabled: expediente.pasos_completados?.includes(3),
+    enabled: !!expediente.pasos_completados?.includes(3) || ran,
     retry: false,
   })
 
   const ejecutarMutation = useMutation({
     mutationFn: () => pasosAPI.ejecutarPaso(expediente.id, 3),
     onSuccess: () => {
+      setRan(true)
       qc.invalidateQueries({ queryKey: ['expediente', String(expediente.id)] })
       qc.invalidateQueries({ queryKey: ['paso3', expediente.id] })
       push('success', 'Paso 3 completado — justificaciones IA generadas')

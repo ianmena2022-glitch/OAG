@@ -11,17 +11,19 @@ interface Props { expediente: any }
 export default function Paso6({ expediente }: Props) {
   const qc = useQueryClient()
   const { push } = useNotificationStore()
+  const [ran, setRan] = React.useState(false)
 
   const { data: resultado } = useQuery({
     queryKey: ['paso6', expediente.id],
     queryFn: () => pasosAPI.resultadoPaso(expediente.id, 6).then((r) => r.data),
-    enabled: expediente.pasos_completados?.includes(6),
+    enabled: !!expediente.pasos_completados?.includes(6) || ran,
     retry: false,
   })
 
   const ejecutarMutation = useMutation({
     mutationFn: () => pasosAPI.ejecutarPaso(expediente.id, 6),
     onSuccess: () => {
+      setRan(true)
       qc.invalidateQueries({ queryKey: ['expediente', String(expediente.id)] })
       qc.invalidateQueries({ queryKey: ['paso6', expediente.id] })
       push('success', 'Informe final con glosario generado')

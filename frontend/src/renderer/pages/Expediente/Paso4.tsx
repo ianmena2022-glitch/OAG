@@ -17,6 +17,7 @@ export default function Paso4({ expediente }: Props) {
   const qc = useQueryClient()
   const { push } = useNotificationStore()
   const [uploading, setUploading] = React.useState<Record<string, boolean>>({})
+  const [ran, setRan] = React.useState(false)
 
   const archivos = expediente.archivos || []
   const getArchivo = (tipo: string) => archivos.find((a: any) => a.tipo === tipo)
@@ -34,13 +35,14 @@ export default function Paso4({ expediente }: Props) {
   const { data: resultado } = useQuery({
     queryKey: ['paso4', expediente.id],
     queryFn: () => pasosAPI.resultadoPaso(expediente.id, 4).then((r) => r.data),
-    enabled: expediente.pasos_completados?.includes(4),
+    enabled: !!expediente.pasos_completados?.includes(4) || ran,
     retry: false,
   })
 
   const ejecutarMutation = useMutation({
     mutationFn: () => pasosAPI.ejecutarPaso(expediente.id, 4),
     onSuccess: () => {
+      setRan(true)
       qc.invalidateQueries({ queryKey: ['expediente', String(expediente.id)] })
       qc.invalidateQueries({ queryKey: ['paso4', expediente.id] })
       push('success', 'Análisis de compras completado')

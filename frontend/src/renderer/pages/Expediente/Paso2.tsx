@@ -19,6 +19,9 @@ export default function Paso2({ expediente }: Props) {
   const { push } = useNotificationStore()
   const [tab, setTab] = useState<'ranking_c' | 'ranking_p' | 'muestreo' | 'clasificacion' | 'apertura'>('ranking_c')
   const [uploading, setUploading] = useState<Record<string, boolean>>({})
+  // ran: true después de ejecutar por primera vez en esta sesión,
+  // para que el query se dispare aunque pasos_completados aún no esté actualizado
+  const [ran, setRan] = useState(false)
 
   const archivos = expediente.archivos || []
   const getArchivo = (tipo: string) => archivos.find((a: any) => a.tipo === tipo)
@@ -36,16 +39,17 @@ export default function Paso2({ expediente }: Props) {
     }
   }
 
-  const { data: resultado } = useQuery({
+  const { data: resultado, isLoading: loadingResultado } = useQuery({
     queryKey: ['paso2', expediente.id],
     queryFn: () => pasosAPI.resultadoPaso(expediente.id, 2).then((r) => r.data),
-    enabled: expediente.pasos_completados?.includes(2),
+    enabled: !!expediente.pasos_completados?.includes(2) || ran,
     retry: false,
   })
 
   const ejecutarMutation = useMutation({
     mutationFn: () => pasosAPI.ejecutarPaso(expediente.id, 2),
     onSuccess: () => {
+      setRan(true)
       qc.invalidateQueries({ queryKey: ['expediente', String(expediente.id)] })
       qc.invalidateQueries({ queryKey: ['paso2', expediente.id] })
       push('success', 'Paso 2 ejecutado — clasificación con IA completada')
@@ -138,6 +142,12 @@ export default function Paso2({ expediente }: Props) {
           {ejecutarMutation.isPending ? 'Procesando con IA...' : 'Ejecutar Análisis'}
         </button>
       </div>
+
+      {loadingResultado && (
+        <div className="flex items-center justify-center py-8">
+          <Loader size={20} className="animate-spin text-oag-muted" />
+        </div>
+      )}
 
       {resultado && (
         <>
