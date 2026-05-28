@@ -81,19 +81,34 @@ def ejecutar_paso2(
             "total_agro_usd": round(df_agro["monto_usd"].sum(), 2),
             "cant_productos": len(productos_unicos),
             "cant_productos_agro": len(productos_agro),
+            "diagnostico": df.attrs.get("diagnostico", {}),
         },
     }
 
 
 def _preparar_df(df: pd.DataFrame, anio: int) -> pd.DataFrame:
-    """Normaliza tipos y filtra por año. Tolera nombres de columna variables."""
-    df = df.copy()
+    """Normaliza tipos y filtra por año. Tolera nombres de columna variables.
 
-    # ── fecha ── buscar columna con nombre estándar o variantes comunes
+    Adjunta diagnóstico en df.attrs["diagnostico"] para surface en los totales:
+      filas_archivo, filas_anio, anios_presentes, anio_pedido, filtro_aplicado.
+    """
+    df = df.copy()
+    diag = {"filas_archivo": int(len(df))}
+
+    # ── fecha ── buscar columna con nombre estándar o variantes (exacto → parcial)
     col_fecha = next(
-        (c for c in df.columns if str(c).strip().lower() in ("fecha", "date", "fecha_emision", "fecha emision")),
+        (c for c in df.columns if str(c).strip().lower() in (
+            "fecha", "date", "fecha_emision", "fecha emision", "fecha_comprobante",
+            "fecha comprobante", "fecha de emision", "fecha de emisión",
+        )),
         None
     )
+    if col_fecha is None:
+        col_fecha = next(
+            (c for c in df.columns
+             if "fecha" in str(c).strip().lower() or str(c).strip().lower() == "date"),
+            None
+        )
     if col_fecha is None:
         raise KeyError(
             f"No se encontró columna 'fecha' en la bajada normalizada. "
@@ -101,7 +116,32 @@ def _preparar_df(df: pd.DataFrame, anio: int) -> pd.DataFrame:
             "Re-ejecutá el Paso 1 para regenerar el archivo normalizado."
         )
     df["fecha"] = pd.to_datetime(df[col_fecha], errors="coerce")
-    df = df[df["fecha"].dt.year == anio] if anio else df
+
+    # Años efectivamente presentes (descarta NaT)
+    anios_presentes = sorted(
+        int(a) for a in df["fecha"].dt.year.dropna().unique().tolist()
+    )
+    diag["anios_presentes"] = anios_presentes
+    diag["anio_pedido"] = int(anio) if anio else None
+
+    # ── filtro por año NO destructivo ──
+    # Si el año pedido no tiene filas pero hay datos en otros años, NO vaciar:
+    # usar todas las filas con fecha válida y avisar (config de año probablemente errónea).
+    if anio and anio in anios_presentes:
+        df = df[df["fecha"].dt.year == anio]
+        diag["filtro_aplicado"] = f"año {anio}"
+    elif anio and anios_presentes:
+        df = df[df["fecha"].notna()]
+        diag["filtro_aplicado"] = (
+            f"SIN FILTRO — no hay datos del año {anio}; "
+            f"se usan todos los años presentes: {anios_presentes}"
+        )
+    else:
+        df = df[df["fecha"].notna()] if len(df) else df
+        diag["filtro_aplicado"] = "sin año configurado — todas las fechas válidas"
+
+    diag["filas_anio"] = int(len(df))
+    df.attrs["diagnostico"] = diag
     df["mes"] = df["fecha"].dt.month
 
     # ── monto_usd ──
