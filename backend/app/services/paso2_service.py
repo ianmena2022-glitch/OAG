@@ -125,20 +125,25 @@ def _preparar_df(df: pd.DataFrame, anio: int) -> pd.DataFrame:
     diag["anio_pedido"] = int(anio) if anio else None
 
     # ── filtro por año NO destructivo ──
-    # Si el año pedido no tiene filas pero hay datos en otros años, NO vaciar:
-    # usar todas las filas con fecha válida y avisar (config de año probablemente errónea).
+    # Solo se filtra cuando el año pedido EXISTE en los datos. En cualquier otro
+    # caso (año no presente, o fechas que no parsean) se conservan TODAS las filas
+    # para que los rankings de clientes/productos siempre tengan datos. La tabla
+    # de apertura mensual igual se arma solo con las filas que tengan fecha válida.
     if anio and anio in anios_presentes:
         df = df[df["fecha"].dt.year == anio]
         diag["filtro_aplicado"] = f"año {anio}"
     elif anio and anios_presentes:
-        df = df[df["fecha"].notna()]
         diag["filtro_aplicado"] = (
             f"SIN FILTRO — no hay datos del año {anio}; "
             f"se usan todos los años presentes: {anios_presentes}"
         )
+    elif anio:
+        diag["filtro_aplicado"] = (
+            f"SIN FILTRO — ninguna fecha del archivo se pudo interpretar "
+            f"(revisar columna de fecha en la bajada). Año pedido: {anio}"
+        )
     else:
-        df = df[df["fecha"].notna()] if len(df) else df
-        diag["filtro_aplicado"] = "sin año configurado — todas las fechas válidas"
+        diag["filtro_aplicado"] = "sin año configurado — se usan todas las filas"
 
     diag["filas_anio"] = int(len(df))
     df.attrs["diagnostico"] = diag
