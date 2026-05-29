@@ -154,10 +154,11 @@ export default function Paso2({ expediente }: Props) {
           <PasoFeedback validacion={resultado.validacion} />
 
           {/* Totales */}
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-5 gap-3">
             {[
               { label: 'Total Facturado', value: formatUSD(resultado.totales?.total_facturado_usd) },
               { label: 'Total Agroquímicos', value: formatUSD(resultado.totales?.total_agro_usd) },
+              { label: 'Total Syngenta', value: formatUSD(resultado.totales?.total_syngenta_usd) },
               { label: 'Productos únicos', value: resultado.totales?.cant_productos },
               { label: 'Productos agroquímicos', value: resultado.totales?.cant_productos_agro },
             ].map((s, i) => (

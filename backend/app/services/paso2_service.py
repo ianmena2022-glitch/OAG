@@ -58,9 +58,11 @@ def ejecutar_paso2(
         for c in clasificaciones
     ]
 
-    # 6. Filtro agroquímicos
+    # 6. Filtros
     productos_agro = {c["producto"] for c in clasificaciones if c["agroquimico"] == "SI"}
+    productos_syngenta = {c["producto"] for c in clasificaciones if c.get("syngenta") == "SI"}
     df_agro = df[df["articulo"].isin(productos_agro)].copy()
+    df_syngenta = df[df["articulo"].isin(productos_syngenta)].copy()
 
     # 7. Tabla de apertura
     tabla_apertura = _tabla_apertura(df_agro, clasificacion_map, anio_analisis)
@@ -72,8 +74,10 @@ def ejecutar_paso2(
     totales = {
         "total_facturado_usd": round(df["monto_usd"].sum(), 2),
         "total_agro_usd": round(df_agro["monto_usd"].sum(), 2),
+        "total_syngenta_usd": round(df_syngenta["monto_usd"].sum(), 2),
         "cant_productos": len(productos_unicos),
         "cant_productos_agro": len(productos_agro),
+        "cant_productos_syngenta": len(productos_syngenta),
         "diagnostico": df.attrs.get("diagnostico", {}),
     }
 
