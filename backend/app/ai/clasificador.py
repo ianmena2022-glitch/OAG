@@ -1,100 +1,215 @@
 """
 Clasifica productos como Agroquímico SI/NO y Syngenta SI/NO usando Claude.
-Trabaja en batches para eficiencia.
+
+Optimización: trabaja en DOS etapas para ahorrar tokens y tiempo.
+  Etapa 1 — clasifica TODOS los productos como agroquímico SI/NO (prompt corto,
+            sin contexto Syngenta).
+  Etapa 2 — SOLO para los que dieron agroquímico=SI, decide si son Syngenta
+            (prompt enfocado, con el maestro Syngenta como contexto).
+
+Para los productos con agroquímico=NO, syngenta queda automáticamente en "NO"
+y se conserva la justificación de la Etapa 1.
 """
 import json
 from typing import List, Dict
 from .claude_client import chat
 
-SYSTEM_CLASIFICADOR = """Eres un experto auditor en el rubro agropecuario argentino con amplio conocimiento
-de productos agroquímicos y de la cartera comercial de Syngenta Argentina.
 
-Tu tarea es clasificar productos facturados por un distribuidor agropecuario en dos dimensiones:
+# ─── Etapa 1: ¿es agroquímico? ─────────────────────────────────────────────────
 
-1. AGROQUIMICO (SI/NO): Es agroquímico si corresponde a:
-   - Herbicidas (glifosato, atrazina, 2,4-D, dicamba, etc.)
-   - Insecticidas (clorpirifos, lambdacialotrina, imidacloprid, etc.)
-   - Fungicidas (mancozeb, tebuconazole, azoxystrobin, etc.)
-   - Fertilizantes (urea, fosfatos, nitrógeno, micronutrientes, etc.)
-   - Coadyuvantes / adherentes / aceites agrícolas
-   - Inoculantes para semillas
-   - Curasemillas
-   - Acaricidas, nematicidas, rodenticidas de uso agrícola
+SYSTEM_AGROQUIMICO = """Eres un experto en productos agropecuarios argentinos.
 
-   NO es agroquímico:
-   - Semillas sin curasemilla
-   - Maquinaria, repuestos, herramientas
-   - Alimentos para animales (forrajes, balanceados)
-   - Veterinarios (antibióticos, antiparasitarios, vacunas)
-   - Combustibles, lubricantes
-   - Servicios, mano de obra
-   - Packaging, envases
-   - Artículos de limpieza o higiene
+Tu tarea: para cada producto, decidir si es un AGROQUÍMICO de uso agrícola.
 
-2. SYNGENTA (SI/NO): Pertenece a la cartera de Syngenta si coincide con
-   alguno de sus productos registrados. Productos conocidos de Syngenta incluyen
-   (entre muchos otros): Actara, Ampligo, Amistar, Azimut, Callisto, Curzate,
-   Dual Gold, Elatus, Engeo, Flint, Force, Gramoxone, Header, Herculex, Karate,
-   Lannate, Laudis, Lumax, Maxim, NK Seeds, Priori, Quadris, Revus, Ridomil,
-   Sencor, Sequence, Switch, Tazer, Touchdown, Trophy, Tilt, Vertimec, Voliam,
-   Bontima, CruiserMaxx, Denim, Endura, Expert, Folicur (cuando es Syngenta),
-   y todos sus genéricos, formulaciones y mezclas.
+ES agroquímico:
+  - Herbicidas (glifosato, atrazina, 2,4-D, dicamba, etc.)
+  - Insecticidas (clorpirifos, lambdacialotrina, imidacloprid, etc.)
+  - Fungicidas (mancozeb, tebuconazole, azoxystrobin, etc.)
+  - Fertilizantes (urea, fosfatos, nitrógeno, micronutrientes, etc.)
+  - Coadyuvantes / adherentes / aceites agrícolas
+  - Inoculantes para semillas y curasemillas
+  - Acaricidas, nematicidas, rodenticidas de uso agrícola
 
-   Considera también principios activos exclusivos o asociados históricamente a Syngenta:
-   azoxystrobin + cyproconazol (Amistar Top), tiametoxam (Actara/Engeo),
-   clorantraniliprol (Altacor/Coragen), lambda-cihalotrina (Karate).
+NO es agroquímico:
+  - Semillas sin curasemilla
+  - Maquinaria, repuestos, herramientas, bolsas silo
+  - Alimentos para animales (forrajes, balanceados)
+  - Veterinarios (antibióticos, antiparasitarios, vacunas)
+  - Combustibles, lubricantes
+  - Servicios, mano de obra, fletes
+  - Packaging, envases
+  - Artículos de limpieza, higiene, oficina
 
-Responde ÚNICAMENTE con un JSON array válido. Para cada producto ingresado devuelve:
+Responde ÚNICAMENTE un JSON array. Para cada producto:
 [
   {
-    "producto": "nombre exacto del producto recibido",
+    "producto": "nombre exacto recibido",
     "agroquimico": "SI" | "NO",
-    "syngenta": "SI" | "NO",
-    "justificacion": "breve explicación de la clasificación (máx 100 chars)"
+    "justificacion": "breve explicación (máx 100 chars)"
   },
   ...
 ]
 """
 
 
-def clasificar_productos(productos: List[str], maestro_syngenta: List[str] = None) -> List[Dict]:
-    """
-    Clasifica una lista de productos. Retorna lista de dicts con clasificación.
-    Trabaja en batches de 50 para no exceder tokens.
-    """
-    if not productos:
-        return []
+# ─── Etapa 2: ¿es Syngenta? (solo agroquímicos) ────────────────────────────────
 
+SYSTEM_SYNGENTA = """Eres un experto en la cartera comercial de Syngenta Argentina.
+
+Todos los productos que recibís YA son agroquímicos. Tu única tarea es decidir
+si pertenecen a la cartera de Syngenta.
+
+Productos conocidos de Syngenta (entre muchos otros): Actara, Ampligo, Amistar,
+Azimut, Callisto, Curzate, Dual Gold, Elatus, Engeo, Flint, Force, Gramoxone,
+Header, Herculex, Karate, Lannate, Laudis, Lumax, Maxim, NK Seeds, Priori,
+Quadris, Revus, Ridomil, Sencor, Sequence, Switch, Tazer, Touchdown, Trophy,
+Tilt, Vertimec, Voliam, Bontima, CruiserMaxx, Denim, Endura, Expert,
+Folicur (cuando es Syngenta), y todos sus genéricos, formulaciones y mezclas.
+
+Principios activos exclusivos o asociados históricamente a Syngenta:
+azoxystrobin + cyproconazol (Amistar Top), tiametoxam (Actara/Engeo),
+clorantraniliprol (Altacor/Coragen), lambda-cihalotrina (Karate).
+
+Responde ÚNICAMENTE un JSON array. Para cada producto:
+[
+  {
+    "producto": "nombre exacto recibido",
+    "syngenta": "SI" | "NO",
+    "justificacion": "breve explicación (máx 100 chars)"
+  },
+  ...
+]
+"""
+
+
+def _parse_json_array(response: str) -> list:
+    """Extrae un JSON array de la respuesta de Claude, tolerante a bloques markdown."""
+    text = response.strip()
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0].strip()
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0].strip()
+    return json.loads(text)
+
+
+def _clasificar_agroquimicos(productos: List[str], batch_size: int = 50) -> List[Dict]:
+    """Etapa 1: clasifica cada producto como agroquímico SI/NO."""
     resultados = []
-    batch_size = 50
-
-    maestro_context = ""
-    if maestro_syngenta:
-        sample = maestro_syngenta[:100]
-        maestro_context = f"\n\nProductos confirmados de Syngenta (maestro oficial):\n{json.dumps(sample, ensure_ascii=False)}"
-
     for i in range(0, len(productos), batch_size):
         batch = productos[i: i + batch_size]
-        user_msg = f"Clasificá los siguientes {len(batch)} productos:{maestro_context}\n\nProductos a clasificar:\n{json.dumps(batch, ensure_ascii=False)}"
-
-        response = chat(SYSTEM_CLASIFICADOR, user_msg, max_tokens=4096)
-
+        user_msg = (
+            f"Clasificá los siguientes {len(batch)} productos:\n\n"
+            f"{json.dumps(batch, ensure_ascii=False)}"
+        )
         try:
-            text = response.strip()
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0].strip()
-            batch_results = json.loads(text)
+            response = chat(SYSTEM_AGROQUIMICO, user_msg, max_tokens=4096)
+            batch_results = _parse_json_array(response)
             resultados.extend(batch_results)
-        except (json.JSONDecodeError, KeyError):
-            # Fallback: marcar todos como no clasificados
+        except (json.JSONDecodeError, KeyError, Exception):
             for p in batch:
                 resultados.append({
                     "producto": p,
                     "agroquimico": "REVISAR",
-                    "syngenta": "REVISAR",
                     "justificacion": "Error en clasificación automática — revisar manualmente",
                 })
+    return resultados
+
+
+def _clasificar_syngenta(productos_agro: List[str], maestro_syngenta: List[str] = None,
+                         batch_size: int = 50) -> Dict[str, Dict]:
+    """
+    Etapa 2: para los productos ya marcados como agroquímico, decide si son Syngenta.
+    Devuelve un dict {producto: {syngenta, justificacion}} para fácil mezcla.
+    """
+    if not productos_agro:
+        return {}
+
+    maestro_context = ""
+    if maestro_syngenta:
+        sample = maestro_syngenta[:100]
+        maestro_context = (
+            f"\n\nProductos confirmados de Syngenta (maestro oficial):\n"
+            f"{json.dumps(sample, ensure_ascii=False)}"
+        )
+
+    mapa: Dict[str, Dict] = {}
+    for i in range(0, len(productos_agro), batch_size):
+        batch = productos_agro[i: i + batch_size]
+        user_msg = (
+            f"Decidí si cada uno pertenece a la cartera de Syngenta "
+            f"({len(batch)} productos):{maestro_context}\n\n"
+            f"{json.dumps(batch, ensure_ascii=False)}"
+        )
+        try:
+            response = chat(SYSTEM_SYNGENTA, user_msg, max_tokens=4096)
+            batch_results = _parse_json_array(response)
+            for item in batch_results:
+                nombre = item.get("producto")
+                if nombre:
+                    mapa[nombre] = {
+                        "syngenta": item.get("syngenta", "REVISAR"),
+                        "justificacion": item.get("justificacion", ""),
+                    }
+        except (json.JSONDecodeError, KeyError, Exception):
+            for p in batch:
+                mapa[p] = {
+                    "syngenta": "REVISAR",
+                    "justificacion": "Error en clasificación Syngenta — revisar manualmente",
+                }
+    return mapa
+
+
+# ─── Orquestador público (firma sin cambios para no romper paso2_service) ──────
+
+def clasificar_productos(productos: List[str], maestro_syngenta: List[str] = None) -> List[Dict]:
+    """
+    Clasifica una lista de productos en dos etapas:
+      1. agroquímico SI/NO sobre TODOS los productos
+      2. Syngenta SI/NO SOLO sobre los que dieron agroquímico=SI
+
+    Para los no-agroquímicos, syngenta se fuerza a "NO" y se conserva la
+    justificación de la etapa 1 ("es semilla", "es lubricante", etc.).
+
+    Devuelve la MISMA estructura que antes — la app muestra todo igual:
+    [{producto, agroquimico, syngenta, justificacion}, ...]
+    """
+    if not productos:
+        return []
+
+    # Etapa 1: ¿agroquímico?
+    etapa1 = _clasificar_agroquimicos(productos)
+
+    # Etapa 2: solo para los SI
+    productos_agro = [r["producto"] for r in etapa1 if r.get("agroquimico") == "SI"]
+    mapa_syngenta = _clasificar_syngenta(productos_agro, maestro_syngenta)
+
+    # Mezclar y devolver con la estructura clásica
+    resultados: List[Dict] = []
+    for r in etapa1:
+        nombre = r.get("producto")
+        agro = r.get("agroquimico", "REVISAR")
+        if agro == "SI":
+            syng = mapa_syngenta.get(nombre, {})
+            resultados.append({
+                "producto": nombre,
+                "agroquimico": "SI",
+                "syngenta": syng.get("syngenta", "REVISAR"),
+                # Para agroquímicos la justificación que importa es la de Syngenta
+                "justificacion": syng.get("justificacion") or r.get("justificacion", ""),
+            })
+        elif agro == "NO":
+            resultados.append({
+                "producto": nombre,
+                "agroquimico": "NO",
+                "syngenta": "NO",   # no-agroquímico → no puede ser Syngenta
+                "justificacion": r.get("justificacion", ""),
+            })
+        else:   # REVISAR
+            resultados.append({
+                "producto": nombre,
+                "agroquimico": "REVISAR",
+                "syngenta": "REVISAR",
+                "justificacion": r.get("justificacion", "Revisar manualmente"),
+            })
 
     return resultados
