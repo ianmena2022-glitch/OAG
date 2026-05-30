@@ -5,7 +5,10 @@ const BACKEND_URL = localStorage.getItem('oag_backend_url') || 'https://ogsa.up.
 
 export const api = axios.create({
   baseURL: BACKEND_URL,
-  timeout: 120000, // 2 min para operaciones con IA
+  // 10 min: Paso 2 (clasificación IA) y Paso 3 (justificaciones IA) pueden
+  // tardar varios minutos cuando hay muchos productos/diferencias. Si el
+  // frontend mata la request, el backend igual la termina pero queda perdida.
+  timeout: 600000,
 })
 
 // Interceptor para auth token
