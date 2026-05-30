@@ -709,6 +709,18 @@ def _cruzar_crm(df_gestion: pd.DataFrame, df_crm: pd.DataFrame) -> List[Dict]:
         d = "".join(c for c in str(s or "") if c.isdigit())
         return d[-8:].zfill(8) if d else ""
 
+    def _tipo_norm(t):
+        """Normaliza el tipo a FC/NC/ND para que matche entre gestión y CRM.
+        RM (remito) del CRM se trata como FC. Importante usar el tipo en la
+        clave de match para no confundir FC nro X con NC nro X (mismo número
+        fiscal, comprobantes distintos)."""
+        t = str(t or "").upper().strip()
+        if "NC" in t or t.startswith("N/C"):
+            return "NC"
+        if "ND" in t or t.startswith("N/D"):
+            return "ND"
+        return "FC"   # FC, FB, RM, etc. todos quedan como FC para el match
+
     def _primer_no_vacio(serie):
         for v in serie:
             sv = str(v or "").strip()
@@ -724,17 +736,19 @@ def _cruzar_crm(df_gestion: pd.DataFrame, df_crm: pd.DataFrame) -> List[Dict]:
     # ── Preparar gestión ────────────────────────────────────────────────────
     g = df_gestion.copy()
     g["__num__"] = g["numero_comprobante"].apply(_num_fiscal)
-    g = g[g["__num__"] != ""]
     if "tipo_comprobante" not in g.columns:
         g["tipo_comprobante"] = ""
+    g["__tipo__"] = g["tipo_comprobante"].apply(_tipo_norm)
+    g["__key__"] = g["__tipo__"] + "|" + g["__num__"]
+    g = g[g["__num__"] != ""]
     if "articulo" not in g.columns:
         g["articulo"] = ""
 
-    g_agg = g.groupby("__num__", dropna=False).agg(
+    g_agg = g.groupby("__key__", dropna=False).agg(
         numero=("numero_comprobante", _primer_no_vacio),
         fecha=("fecha", "first"),
         cuit=("cuit_cliente", _primer_no_vacio),
-        tipo=("tipo_comprobante", _primer_no_vacio),
+        tipo=("__tipo__", "first"),
         productos=("articulo", _productos_concat),
         cantidad=("cantidad", "sum"),
         monto=("monto_usd", "sum"),
@@ -743,25 +757,27 @@ def _cruzar_crm(df_gestion: pd.DataFrame, df_crm: pd.DataFrame) -> List[Dict]:
     # ── Preparar CRM ────────────────────────────────────────────────────────
     c = df_crm.copy()
     c["__num__"] = c["numero_crm"].apply(_num_fiscal)
+    if "tipo_crm" not in c.columns:
+        c["tipo_crm"] = ""
+    c["__tipo__"] = c["tipo_crm"].apply(_tipo_norm)
+    c["__key__"] = c["__tipo__"] + "|" + c["__num__"]
     c = c[c["__num__"] != ""]
     if "cliente_crm" not in c.columns:
         c["cliente_crm"] = ""
-    if "tipo_crm" not in c.columns:
-        c["tipo_crm"] = ""
 
-    c_agg = c.groupby("__num__", dropna=False).agg(
+    c_agg = c.groupby("__key__", dropna=False).agg(
         numero=("numero_crm", _primer_no_vacio),
         fecha=("fecha_crm", "first"),
         cuit=("cuit_cliente_crm", _primer_no_vacio),
         cliente=("cliente_crm", _primer_no_vacio),
-        tipo=("tipo_crm", _primer_no_vacio),
+        tipo=("__tipo__", "first"),
         productos=("producto_crm", _productos_concat),
         cantidad=("cantidad_crm", "sum"),
         monto=("monto_crm", "sum"),
     ).reset_index()
 
-    g_map = {r["__num__"]: r for _, r in g_agg.iterrows()}
-    c_map = {r["__num__"]: r for _, r in c_agg.iterrows()}
+    g_map = {r["__key__"]: r for _, r in g_agg.iterrows()}
+    c_map = {r["__key__"]: r for _, r in c_agg.iterrows()}
 
     def _fmt_fecha(v):
         s = str(v or "")[:10]
@@ -778,12 +794,49 @@ def _cruzar_crm(df_gestion: pd.DataFrame, df_crm: pd.DataFrame) -> List[Dict]:
             monto_g = float(gr["monto"] or 0)
             monto_c = float(cr["monto"] or 0)
             diff_monto = round(monto_g - monto_c, 2)
-            # OK si la diferencia es chica en absoluto O en relativo.
-            # Las diferencias chicas vienen casi siempre del TC distinto entre
-            # Syngenta (su TC interno) y el TC del usuario — no son hallazgos.
+
+            # Detalle de producto en gestión: si NO tiene (típico de NC/ND
+            # cuyo archivo no trae columna de producto), no se puede comparar
+            # el monto Syngenta-específico contra el CRM — el monto del lado
+            # gestión es el TOTAL del comprobante (todos los productos del
+            # cliente), no solo la porción Syngenta. Hacer comparación parcial:
+            # OK por presencia.
+            gestion_tiene_detalle = bool(str(gr["productos"] or "").strip())
+
+            # CUIT distinto entre gestión y CRM es un finding genuino aun
+            # cuando los montos coincidan (lo detecta el auditor).
+            cuit_g_d = _solo_digitos(gr["cuit"])
+            cuit_c_d = _solo_digitos(cr["cuit"])
+            cuit_difiere = bool(cuit_g_d and cuit_c_d and cuit_g_d != cuit_c_d)
+
+            # Tolerancia 5% relativo o $5 absoluto — calibrada contra los
+            # umbrales que usan auditores humanos. Diferencias chicas son ruido
+            # del TC distinto entre Syngenta y el TC del usuario.
+            ABS_TOL = 5.0
+            REL_TOL = 0.05
             max_monto = max(abs(monto_g), abs(monto_c))
             rel = abs(diff_monto) / max_monto if max_monto > 0 else 0
-            estado = "OK" if abs(diff_monto) < 5.0 or rel < 0.02 else "DIFERENCIA"
+
+            justif = ""
+            if cuit_difiere:
+                estado = "DIFERENCIA"
+                justif = f"CUIT difiere — gestión: {cuit_g_d} vs CRM: {cuit_c_d}"
+            elif not gestion_tiene_detalle and abs(monto_g) > abs(monto_c) * 1.10:
+                # NC/ND sin detalle de producto Y monto gestión >> monto CRM:
+                # típico de NC que cubre varios productos del cliente, donde el
+                # CRM solo refleja la porción Syngenta. No se puede comparar
+                # montos justamente → OK por presencia.
+                estado = "OK"
+                justif = ("Reportada en CRM (NC sin detalle de producto en "
+                          "gestión — el monto del lado gestión incluye otros "
+                          "productos no Syngenta del mismo cliente)")
+            else:
+                # Comparación normal (vale para FC con detalle y para NC
+                # Syngenta-only donde gestion ≈ CRM).
+                estado = "OK" if abs(diff_monto) <= ABS_TOL or rel <= REL_TOL else "DIFERENCIA"
+                if estado == "DIFERENCIA":
+                    justif = "Pendiente de análisis"
+
             tipo = str(gr["tipo"] or cr["tipo"] or "")
             if not tipo:
                 tipo = "NC" if (monto_c < 0 or monto_g < 0) else "FC"
@@ -800,7 +853,7 @@ def _cruzar_crm(df_gestion: pd.DataFrame, df_crm: pd.DataFrame) -> List[Dict]:
                 "monto_gestion_usd": round(monto_g, 2),
                 "monto_crm_usd": round(monto_c, 2),
                 "diferencia_monto": diff_monto,
-                "justificacion": "" if estado == "OK" else "Pendiente de análisis",
+                "justificacion": justif,
                 "estado": estado,
             })
         elif gr is not None:
