@@ -97,6 +97,14 @@ ipcMain.handle('update:install', () => {
   autoUpdater.quitAndInstall()
 })
 
+// IPC: reintentar verificación manual (útil si la primera falló por red/GitHub)
+ipcMain.handle('update:check', () => {
+  return autoUpdater.checkForUpdates().catch((err) => {
+    console.error('[update:check]', err)
+    return { error: err?.message || String(err) }
+  })
+})
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.ogsa.auditoria')
 

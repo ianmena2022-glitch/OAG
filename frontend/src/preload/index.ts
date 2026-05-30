@@ -11,4 +11,5 @@ contextBridge.exposeInMainWorld('electron', {
   onUpdateReady:        (cb: (info: any) => void) =>     ipcRenderer.on('update:ready',        (_, i) => cb(i)),
   onUpdateError:        (cb: (msg: string) => void) =>   ipcRenderer.on('update:error',        (_, m) => cb(m)),
   installUpdate:        (): Promise<void> =>             ipcRenderer.invoke('update:install'),
+  checkUpdate:          (): Promise<void> =>             ipcRenderer.invoke('update:check'),
 })

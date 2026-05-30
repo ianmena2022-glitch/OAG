@@ -125,9 +125,27 @@ export default function UpdateBanner() {
         )}
 
         {state.status === 'error' && (
-          <p className="text-red-700 text-xs">
-            No se pudo verificar la actualización. Intentá más tarde.
-          </p>
+          <div className="space-y-2">
+            <p className="text-red-700 text-xs">
+              No se pudo verificar la actualización.
+            </p>
+            {state.message && (
+              <p className="text-red-900 text-[10px] font-mono break-all bg-red-100 rounded px-2 py-1">
+                {state.message}
+              </p>
+            )}
+            <button
+              onClick={async () => {
+                setState({ status: 'idle' })
+                await (window as any).electron?.checkUpdate?.()
+              }}
+              className="w-full flex items-center justify-center gap-2 bg-red-600 text-white
+                         text-xs font-semibold py-1.5 rounded-md hover:bg-red-700 transition-colors"
+            >
+              <RefreshCw size={12} />
+              Reintentar
+            </button>
+          </div>
         )}
       </div>
     </div>
