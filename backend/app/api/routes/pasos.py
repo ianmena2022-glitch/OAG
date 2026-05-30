@@ -477,7 +477,9 @@ def ejecutar_paso3(
     import traceback
     try:
         resultado = paso3_service.ejecutar_paso3(
-            path_paso2, path_crm, exp_id
+            path_paso2, path_crm, exp_id,
+            cuit_distribuidor=exp.cuit_distribuidor,
+            nombre_distribuidor=exp.nombre_distribuidor,
         )
         _save_resultado(db, exp_id, 3, "conciliacion", datos=resultado["conciliacion"])
         _save_resultado(db, exp_id, 3, "resumen", datos=resultado["resumen"])

@@ -11,30 +11,104 @@ from typing import List, Dict
 from ..ai.justificador import generar_justificaciones
 from ..ai.smart_parser import parsear_excel
 from ..core.config import settings
-from .paso1_service import normalizar_tipo_comprobante, normalizar_monto
+from .paso1_service import (
+    normalizar_tipo_comprobante,
+    normalizar_monto,
+    normalizar_numero_comprobante,
+)
 
 
+# Schema CRM Syngenta. ORDEN IMPORTANTE: los campos del DISTRIBUIDOR ("Cuenta:")
+# van primero para que el parser "consuma" esas columnas antes que las del
+# cliente ("Vendido a:") — así no las confunde.
 CRM_SCHEMA = {
-    "fecha_crm": ["fecha", "date", "fecha factura", "fecha venta"],
-    "tipo_crm": ["tipo de comprobante", "tipo comprobante", "tipo"],
-    "numero_crm": ["número desde", "numero desde", "nro comprobante",
-                   "nro. comprobante", "número factura", "número", "numero",
-                   "nro", "comprobante", "factura"],
-    "cuit_cliente_crm": ["cuit cliente", "cuit comprador", "cuit", "cuil"],
-    "cliente_crm": ["cliente", "razón social", "razon social", "denominación",
-                    "denominacion", "nombre cliente"],
-    "producto_crm": ["producto", "artículo", "articulo", "descripción producto",
-                     "descripcion producto", "descripción", "descripcion", "item"],
-    "cantidad_crm": ["cantidad", "cant", "qty", "unidades", "vol"],
-    "monto_crm": ["monto usd", "importe usd", "total usd", "monto",
-                  "importe total", "total"],
+    # ── Distribuidor (la "Cuenta" de Syngenta que reporta) ──────────────────
+    "cuit_distribuidor": [
+        "cuenta: cuit", "cuenta cuit", "cuit cuenta",
+        "cuit del distribuidor", "cuit distribuidor", "account cuit",
+    ],
+    "nombre_distribuidor": [
+        "cuenta: nombre", "cuenta nombre", "nombre de la cuenta",
+        "nombre cuenta", "razon social cuenta", "razón social cuenta",
+        "nombre del distribuidor", "account name",
+    ],
+    # ── Cliente final del distribuidor ──────────────────────────────────────
+    "cuit_cliente_crm": [
+        "vendido a: cuit", "vendido a cuit",
+        "cuit cliente", "cuit comprador", "cliente cuit",
+    ],
+    "cliente_crm": [
+        "vendido a: nombre", "vendido a nombre",
+        "nombre cliente", "razón social cliente",
+        "cliente", "razón social", "razon social",
+        "denominación", "denominacion", "comprador",
+    ],
+    # ── Datos del comprobante / línea ───────────────────────────────────────
+    "fecha_crm": ["fecha de la factura", "fecha factura", "fecha venta", "fecha", "date"],
+    "tipo_crm": ["tipo de documento", "tipo de comprobante", "tipo comprobante", "tipo"],
+    "numero_crm": [
+        "numero de factura", "número de factura",
+        "numero factura", "número factura",
+        "nro comprobante", "nro. comprobante",
+        "número desde", "numero desde",
+        "comprobante", "factura",
+    ],
+    "producto_crm": [
+        "descripción homogénea", "descripcion homogenea",
+        "nombre del producto", "producto de lealtad",
+        "descripción producto", "descripcion producto",
+        "producto", "artículo", "articulo",
+        "descripción", "descripcion", "item",
+    ],
+    "cantidad_crm": [
+        "volume in normalized", "volumen normalizado", "volumen",
+        "cantidad", "cant", "qty", "unidades",
+    ],
+    "monto_crm": [
+        "monto de la factura", "monto factura",
+        "monto usd", "importe usd", "total usd",
+        "monto", "importe total", "total",
+    ],
 }
 
+# Exclusiones para evitar colisiones de mapeo entre columnas "Cuenta:" vs
+# "Vendido a:" (distribuidor vs cliente final), y para que el número de
+# factura no se confunda con un número de cuenta interno de Syngenta.
 CRM_EXCLUSIONES = {
-    "numero_crm": ["cuit", "cuil", "doc"],
-    "cuit_cliente_crm": ["proveedor", "vendedor"],
-    "cantidad_crm": ["monto", "importe", "precio"],
+    "cuit_cliente_crm":    ["cuenta", "distribuidor"],
+    "cliente_crm":         ["cuenta", "distribuidor"],
+    "numero_crm":          ["cuit", "cuil", "doc", "cuenta", "vendido a"],
+    "tipo_crm":            ["cuit", "cuil", "doc", "cuenta", "vendido a"],
+    "cantidad_crm":        ["monto", "importe", "precio", "price"],
+    "producto_crm":        ["codigo", "código", "code"],
 }
+
+
+def _solo_digitos(s) -> str:
+    """Devuelve solo los dígitos de una cadena. Para comparar CUITs sin formato."""
+    return "".join(c for c in str(s or "") if c.isdigit())
+
+
+def _numero_crm_a_estandar(valor: str) -> str:
+    """
+    El CRM de Syngenta usa un formato compuesto en 'Numero de factura':
+        'A002226061|FC|A000600020954'
+        (cuenta) | (tipo) | (numero fiscal compuesto)
+
+    Esta función extrae la parte fiscal y la normaliza al mismo formato que
+    usa Paso 1 ("PPPPP-NNNNNNNN") para que el cruce matchee.
+    """
+    if not valor or (isinstance(valor, float) and pd.isna(valor)):
+        return ""
+    s = str(valor).strip()
+    # Si tiene '|', tomar la última parte (el número fiscal compuesto)
+    if "|" in s:
+        s = s.split("|")[-1]
+    # Extraer solo dígitos y normalizar usando la misma función de Paso 1
+    digitos = _solo_digitos(s)
+    if not digitos:
+        return ""
+    return normalizar_numero_comprobante(valor_combinado=digitos)
 
 
 def leer_crm(path: str):
@@ -44,7 +118,10 @@ def leer_crm(path: str):
         task_id="crm",
         schema=CRM_SCHEMA,
         excluir_si_contiene=CRM_EXCLUSIONES,
-        columnas_criticas=["fecha_crm", "numero_crm", "producto_crm", "monto_crm"],
+        # cuit_distribuidor es crítico — sin él no podemos filtrar al distribuidor
+        # del expediente cuando el CRM contiene reportes de varios distribuidores.
+        columnas_criticas=["fecha_crm", "numero_crm", "producto_crm", "monto_crm",
+                          "cuit_distribuidor"],
     )
     df = resultado["df"]
     mapping = resultado["mapping"]
@@ -55,6 +132,95 @@ def leer_crm(path: str):
     print(f"[CRM] método={resultado['metodo']} conf={resultado['confianza']:.2f} "
           f"mapping={mapping} warnings={resultado['warnings']}")
     return df, resultado
+
+
+def _filtrar_crm_por_distribuidor(df: pd.DataFrame, cuit_exp: str,
+                                  nombre_exp: str = "") -> tuple:
+    """
+    Filtra el CRM dejando SOLO las filas del distribuidor del expediente.
+
+    Estrategia:
+      1. Match exacto por CUIT (dígitos puros) — determinístico, sin IA, infalible.
+      2. Si no hay match por CUIT, intenta fuzzy match por nombre (substring
+         insensible a mayúsculas / acentos) como fallback de seguridad.
+      3. Si tampoco así, levanta un error claro listando los distribuidores
+         que SÍ están en el archivo para que el auditor verifique.
+
+    Devuelve (df_filtrado, diag) con info de qué pasó.
+    """
+    diag = {
+        "filas_archivo_total": int(len(df)),
+        "filas_distribuidor": 0,
+        "metodo_filtro": None,
+        "distribuidores_archivo": [],   # primeros N para el mensaje de error
+    }
+    if "cuit_distribuidor" not in df.columns:
+        raise ValueError(
+            "El archivo CRM no tiene una columna que identifique al distribuidor "
+            "(se esperaba 'Cuenta: CUIT' o similar). Sin esa columna no se puede "
+            "filtrar al distribuidor del expediente del CRM consolidado."
+        )
+
+    cuit_norm = _solo_digitos(cuit_exp or "")
+
+    # ── 1. Match exacto por CUIT ─────────────────────────────────────────────
+    df = df.copy()
+    df["__cuit_dist_norm__"] = df["cuit_distribuidor"].astype(str).apply(_solo_digitos)
+
+    if cuit_norm:
+        sel = df[df["__cuit_dist_norm__"] == cuit_norm]
+        if len(sel) > 0:
+            diag["filas_distribuidor"] = int(len(sel))
+            diag["metodo_filtro"] = f"CUIT exacto ({cuit_exp})"
+            return sel.drop(columns=["__cuit_dist_norm__"]), diag
+
+    # ── 2. Fallback fuzzy por nombre ─────────────────────────────────────────
+    if nombre_exp and "nombre_distribuidor" in df.columns:
+        import unicodedata
+        def _norm(s):
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s).lower())
+                          if not unicodedata.combining(c)).strip()
+        nombre_norm = _norm(nombre_exp)
+        if nombre_norm:
+            df["__nom_norm__"] = df["nombre_distribuidor"].astype(str).apply(_norm)
+            # Match si el nombre del expediente está contenido en el nombre del CRM
+            # o viceversa (atajamos diferencias tipo "X SA" vs "X").
+            sel = df[df["__nom_norm__"].str.contains(nombre_norm, na=False, regex=False)]
+            if len(sel) == 0:
+                # Intentar al revés: nombre del CRM contenido en el del expediente
+                sel = df[df["__nom_norm__"].apply(
+                    lambda v: bool(v) and v in nombre_norm
+                )]
+            if len(sel) > 0:
+                diag["filas_distribuidor"] = int(len(sel))
+                diag["metodo_filtro"] = f"nombre similar ({nombre_exp})"
+                return sel.drop(columns=["__cuit_dist_norm__", "__nom_norm__"]), diag
+
+    # ── 3. Ningún match: levantar error con la lista de distribuidores ──────
+    distrib_disponibles = (
+        df.groupby(["__cuit_dist_norm__", "nombre_distribuidor"], dropna=False)
+          .size().reset_index(name="filas")
+          .sort_values("filas", ascending=False)
+          .head(15)
+    ) if "nombre_distribuidor" in df.columns else (
+        df.groupby("__cuit_dist_norm__").size().reset_index(name="filas")
+        .sort_values("filas", ascending=False).head(15)
+    )
+
+    ejemplos = []
+    for _, r in distrib_disponibles.iterrows():
+        nombre = r.get("nombre_distribuidor", "(s/n)") if "nombre_distribuidor" in r.index else ""
+        ejemplos.append(f"  - CUIT {r['__cuit_dist_norm__']}: {nombre} ({int(r['filas'])} filas)")
+    diag["distribuidores_archivo"] = ejemplos
+
+    raise ValueError(
+        f"En el archivo CRM no hay datos del distribuidor con CUIT '{cuit_exp}' "
+        f"({nombre_exp or 'sin nombre'}). El archivo contiene "
+        f"{df['__cuit_dist_norm__'].nunique()} distribuidores distintos. "
+        f"Los principales son:\n" + "\n".join(ejemplos[:10]) +
+        "\n\nVerificá que el CUIT del expediente esté bien escrito y que el CRM "
+        "incluya el período del distribuidor que estás auditando."
+    )
 
 
 def _find_col(cols_lower: dict, keywords: list):
@@ -69,13 +235,25 @@ def ejecutar_paso3(
     path_agroquimicos_syngenta: str,
     path_crm: str,
     expediente_id: int,
+    cuit_distribuidor: str = "",
+    nombre_distribuidor: str = "",
 ) -> dict:
     """
     Cruza agroquímicos Syngenta (Paso 2) vs CRM.
+
+    El archivo CRM de Syngenta contiene reportes de TODOS los distribuidores;
+    se filtra al distribuidor del expediente por CUIT antes de cruzar.
     """
     # Cargar datos
     df_agro = pd.read_excel(path_agroquimicos_syngenta, dtype=str)
     df_crm, crm_info = leer_crm(path_crm)
+
+    # ── Filtrar el CRM al distribuidor del expediente ───────────────────────
+    df_crm, filtro_diag = _filtrar_crm_por_distribuidor(
+        df_crm, cuit_distribuidor, nombre_distribuidor,
+    )
+    print(f"[CRM] Filtro distribuidor: {filtro_diag['metodo_filtro']} → "
+          f"{filtro_diag['filas_distribuidor']:,} de {filtro_diag['filas_archivo_total']:,} filas")
 
     # Preparar DataFrame de gestión (solo Syngenta)
     df_gestion = _preparar_gestion(df_agro)
@@ -112,6 +290,14 @@ def ejecutar_paso3(
         "solo_crm": sum(1 for r in conciliacion if r.get("estado") == "SOLO_CRM"),
     }
 
+    # Sumar el diagnóstico del filtro de distribuidor a los warnings del parser
+    warnings_crm = list(crm_info.get("warnings", []))
+    warnings_crm.insert(0,
+        f"Filtro distribuidor: {filtro_diag['metodo_filtro']} — "
+        f"{filtro_diag['filas_distribuidor']:,} de "
+        f"{filtro_diag['filas_archivo_total']:,} filas del archivo CRM"
+    )
+
     # Diagnóstico estructurado
     parser_diagnostico = []
     if crm_info:
@@ -123,13 +309,14 @@ def ejecutar_paso3(
             "columnas_archivo": crm_info.get("columnas_archivo", []),
             "columnas_faltantes": crm_info.get("columnas_faltantes", []),
             "columnas_no_mapeadas": crm_info.get("columnas_no_mapeadas", []),
-            "warnings": crm_info.get("warnings", []),
+            "warnings": warnings_crm,
         })
 
     return {
         "conciliacion": conciliacion,
         "resumen": resumen,
         "parser_diagnostico": parser_diagnostico,
+        "filtro_distribuidor": filtro_diag,
     }
 
 
@@ -162,7 +349,8 @@ def _preparar_gestion(df: pd.DataFrame) -> pd.DataFrame:
     df["numero_comprobante"] = _col_or_default(
         "numero_comprobante", "numero", default=""
     ).astype(str).str.strip()
-    df["cuit_cliente"] = _col_or_default("cuit_cliente", default="").astype(str).str.strip()
+    # cuit normalizado a dígitos puros para que matchee con el cuit del CRM
+    df["cuit_cliente"] = _col_or_default("cuit_cliente", default="").astype(str).apply(_solo_digitos)
     df["articulo"] = _col_or_default("articulo", default="").astype(str).str.strip().str.upper()
 
     # cantidad puede no existir si la bajada se generó con la versión vieja
@@ -179,12 +367,22 @@ def _preparar_gestion(df: pd.DataFrame) -> pd.DataFrame:
 
 def _preparar_crm(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df["fecha_crm"] = pd.to_datetime(df.get("fecha_crm", ""), errors="coerce")
-    df["numero_crm"] = df.get("numero_crm", "").astype(str).str.strip()
-    df["cuit_cliente_crm"] = df.get("cuit_cliente_crm", "").astype(str).str.strip()
-    df["producto_crm"] = df.get("producto_crm", "").astype(str).str.strip().str.upper()
-    df["cantidad_crm"] = pd.to_numeric(df.get("cantidad_crm"), errors="coerce").fillna(0)
-    df["monto_crm"] = pd.to_numeric(df.get("monto_crm"), errors="coerce").fillna(0)
+    cols = set(df.columns)
+
+    def _serie(*names, default=""):
+        for n in names:
+            if n in cols:
+                return df[n]
+        return pd.Series([default] * len(df), index=df.index)
+
+    df["fecha_crm"] = pd.to_datetime(_serie("fecha_crm", default=""), errors="coerce")
+    # Normalizar el "Numero de factura" del CRM (formato "AXXX|FC|A000600020954")
+    # al mismo formato que usa Paso 1 (PPPPP-NNNNNNNN), sino el cruce nunca matchea.
+    df["numero_crm"] = _serie("numero_crm", default="").astype(str).apply(_numero_crm_a_estandar)
+    df["cuit_cliente_crm"] = _serie("cuit_cliente_crm", default="").astype(str).apply(_solo_digitos)
+    df["producto_crm"] = _serie("producto_crm", default="").astype(str).str.strip().str.upper()
+    df["cantidad_crm"] = pd.to_numeric(_serie("cantidad_crm", default=0), errors="coerce").fillna(0)
+    df["monto_crm"] = pd.to_numeric(_serie("monto_crm", default=0), errors="coerce").fillna(0)
     return df
 
 

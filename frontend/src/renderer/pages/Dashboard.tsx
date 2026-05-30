@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, FolderOpen, Trash2, Calendar, Building2, Loader } from 'lucide-react'
+import { Plus, FolderOpen, Trash2, Calendar, Building2, Loader, Pencil, X } from 'lucide-react'
 import { expedientesAPI } from '../lib/api'
 import { useNotificationStore } from '../store'
 import { formatDate, PASO_LABELS } from '../lib/utils'
@@ -50,6 +50,19 @@ export default function Dashboard() {
       push('success', 'Expediente eliminado')
     },
     onError: (err: any) => push('error', err.response?.data?.detail || 'Error al eliminar'),
+  })
+
+  // Edición de expediente existente
+  const [editExp, setEditExp] = useState<any | null>(null)
+  const editarMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: any }) => expedientesAPI.actualizar(id, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['expedientes'] })
+      qc.invalidateQueries({ queryKey: ['expediente'] })
+      push('success', 'Expediente actualizado')
+      setEditExp(null)
+    },
+    onError: (err: any) => push('error', err.response?.data?.detail || 'Error al actualizar'),
   })
 
   return (
@@ -183,23 +196,115 @@ export default function Dashboard() {
                   })}
                 </div>
 
-                <button
-                  className="ml-3 p-1.5 text-oag-muted hover:text-oag-error hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-all"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    if (confirm(`¿Eliminar expediente "${exp.nombre_distribuidor}"?`)) {
-                      eliminarMutation.mutate(exp.id)
-                    }
-                  }}
-                >
-                  <Trash2 size={14} />
-                </button>
+                <div className="ml-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                  <button
+                    title="Editar datos del expediente"
+                    className="p-1.5 text-oag-muted hover:text-oag-blue hover:bg-blue-50 rounded"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setEditExp({
+                        id: exp.id,
+                        nombre_distribuidor: exp.nombre_distribuidor,
+                        cuit_distribuidor: exp.cuit_distribuidor,
+                        anio_analisis: exp.anio_analisis,
+                      })
+                    }}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    title="Eliminar expediente"
+                    className="p-1.5 text-oag-muted hover:text-oag-error hover:bg-red-50 rounded"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (confirm(`¿Eliminar expediente "${exp.nombre_distribuidor}"?`)) {
+                        eliminarMutation.mutate(exp.id)
+                      }
+                    }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
               <p className="text-xs text-oag-muted mt-2">
                 Creado: {formatDate(exp.created_at)}
               </p>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Modal de edición de expediente existente */}
+      {editExp && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={() => setEditExp(null)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-3 border-b border-oag-border">
+              <h3 className="text-sm font-semibold text-oag-text">Editar expediente #{editExp.id}</h3>
+              <button onClick={() => setEditExp(null)} className="text-oag-muted hover:text-oag-text">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div>
+                <label className="label">Distribuidor</label>
+                <input
+                  className="input-field"
+                  value={editExp.nombre_distribuidor || ''}
+                  onChange={(e) => setEditExp({ ...editExp, nombre_distribuidor: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="label">CUIT</label>
+                <input
+                  className="input-field"
+                  value={editExp.cuit_distribuidor || ''}
+                  onChange={(e) => setEditExp({ ...editExp, cuit_distribuidor: e.target.value })}
+                />
+                <p className="text-xs text-oag-muted mt-1">
+                  Se usa para filtrar el archivo CRM al distribuidor correcto en el Paso 3.
+                </p>
+              </div>
+              <div>
+                <label className="label">Año bajo análisis</label>
+                <input
+                  type="number"
+                  className="input-field"
+                  value={editExp.anio_analisis}
+                  min={2020}
+                  max={2030}
+                  onChange={(e) => setEditExp({ ...editExp, anio_analisis: Number(e.target.value) })}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-3 border-t border-oag-border bg-oag-light/40 rounded-b-lg">
+              <button className="btn-secondary" onClick={() => setEditExp(null)}>
+                Cancelar
+              </button>
+              <button
+                className="btn-primary flex items-center gap-2"
+                onClick={() =>
+                  editarMutation.mutate({
+                    id: editExp.id,
+                    data: {
+                      nombre_distribuidor: editExp.nombre_distribuidor,
+                      cuit_distribuidor: editExp.cuit_distribuidor,
+                      anio_analisis: editExp.anio_analisis,
+                    },
+                  })
+                }
+                disabled={editarMutation.isPending}
+              >
+                {editarMutation.isPending && <Loader size={14} className="animate-spin" />}
+                Guardar cambios
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
