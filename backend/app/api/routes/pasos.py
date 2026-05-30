@@ -472,17 +472,23 @@ def ejecutar_paso3(
     # CRM
     path_crm = _get_archivo_path(exp_id, TipoArchivo.CRM, db)
 
+    # Capturamos TODO con traceback completo para que el toast del frontend muestre
+    # el detalle real en vez de "Internal Server Error" genérico.
+    import traceback
     try:
         resultado = paso3_service.ejecutar_paso3(
             path_paso2, path_crm, exp_id
         )
+        _save_resultado(db, exp_id, 3, "conciliacion", datos=resultado["conciliacion"])
+        _save_resultado(db, exp_id, 3, "resumen", datos=resultado["resumen"])
+        _save_resultado(db, exp_id, 3, "parser_diagnostico",
+                        datos={"items": resultado.get("parser_diagnostico", [])})
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(500, f"Error en Paso 3: {str(e)}")
-
-    _save_resultado(db, exp_id, 3, "conciliacion", datos=resultado["conciliacion"])
-    _save_resultado(db, exp_id, 3, "resumen", datos=resultado["resumen"])
-    _save_resultado(db, exp_id, 3, "parser_diagnostico",
-                    datos={"items": resultado.get("parser_diagnostico", [])})
+        tb = traceback.format_exc()
+        print(f"[PASO 3] EXCEPTION: {tb}")
+        raise HTTPException(500, f"Error en Paso 3: {type(e).__name__}: {str(e) or '(sin mensaje)'}")
 
     # Marcar completado primero — la validación que sigue es best-effort
     _marcar_paso_completado(exp, 3, db)
