@@ -449,25 +449,30 @@ def ejecutar_paso3(
     if 2 not in (exp.pasos_completados or []):
         raise HTTPException(400, "Completar Paso 2 antes de ejecutar Paso 3")
 
-    # Productos Syngenta del Paso 2 (lo correcto para cruzar con CRM Syngenta).
-    # Fallback al archivo "agroquimicos" para expedientes que ya corrieron Paso 2
-    # antes de que existiera el subset Syngenta — en ese caso conviene re-ejecutar
-    # el Paso 2 para obtener el cruce limpio.
-    syng_res = db.query(ResultadoPaso).filter(
-        ResultadoPaso.expediente_id == exp_id,
-        ResultadoPaso.paso == 2,
-        ResultadoPaso.subtipo == "syngenta",
-    ).first()
-    path_paso2 = syng_res.archivo_path if syng_res and syng_res.archivo_path else None
-    if not path_paso2:
-        agro_res = db.query(ResultadoPaso).filter(
+    # Gestión a nivel línea para el cruce con CRM. Preferimos la bajada
+    # NORMALIZADA del Paso 1 (gestión completa, antes de cualquier filtro de
+    # IA) porque el Paso 3 ahora usa las marcas del CRM como ground truth
+    # para identificar productos Syngenta — más confiable que la clasificación
+    # con IA. Si no hay bajada_normalizada (expediente viejo), caemos al
+    # archivo de Syngenta o de agroquímicos del Paso 2.
+    def _archivo_paso(paso, subtipo):
+        r = db.query(ResultadoPaso).filter(
             ResultadoPaso.expediente_id == exp_id,
-            ResultadoPaso.paso == 2,
-            ResultadoPaso.subtipo == "agroquimicos",
+            ResultadoPaso.paso == paso,
+            ResultadoPaso.subtipo == subtipo,
         ).first()
-        if not agro_res or not agro_res.archivo_path:
-            raise HTTPException(400, "Archivo de productos Syngenta no disponible — re-ejecutá el Paso 2")
-        path_paso2 = agro_res.archivo_path
+        return r.archivo_path if r and r.archivo_path else None
+
+    path_paso2 = (
+        _archivo_paso(1, "bajada_normalizada")
+        or _archivo_paso(2, "syngenta")
+        or _archivo_paso(2, "agroquimicos")
+    )
+    if not path_paso2:
+        raise HTTPException(
+            400,
+            "No se encontró la bajada de gestión normalizada. Re-ejecutá Paso 1.",
+        )
 
     # CRM
     path_crm = _get_archivo_path(exp_id, TipoArchivo.CRM, db)

@@ -60,6 +60,13 @@ CRM_SCHEMA = {
         "producto", "artículo", "articulo",
         "descripción", "descripcion", "item",
     ],
+    # Nombre comercial / marca Syngenta — se usa como GROUND TRUTH para
+    # filtrar la gestión: si un producto del distribuidor contiene una marca
+    # del CRM, es Syngenta. Más confiable que cualquier clasificación con IA.
+    "marca_crm": [
+        "nombre comercial", "producto de lealtad: nombre comercial",
+        "marca", "brand", "trademark",
+    ],
     "cantidad_crm": [
         "volume in normalized", "volumen normalizado", "volumen",
         "cantidad", "cant", "qty", "unidades",
@@ -213,6 +220,70 @@ def _leer_crm_filtrado_streaming(path: str, cuit_distribuidor: str) -> tuple:
 
     df = pd.DataFrame(filtradas, columns=header)
     return df, diag
+
+
+def _extraer_marcas_syngenta(df_crm: pd.DataFrame) -> set:
+    """
+    Devuelve el conjunto de marcas Syngenta presentes en el CRM filtrado al
+    distribuidor. Estas marcas son el GROUND TRUTH para identificar productos
+    Syngenta en la gestión del distribuidor — más confiable que una
+    clasificación con IA.
+
+    Prioridad:
+      1. Columna "marca_crm" (Nombre comercial — la marca pura, ej "MEGAFOL")
+      2. Primera palabra de "producto_crm" como proxy (ej "MIRAVIS" de
+         "MIRAVIS DUO 4X5 L")
+    """
+    marcas = set()
+    for col in ("marca_crm", "producto_crm"):
+        if col not in df_crm.columns:
+            continue
+        for v in df_crm[col].dropna().unique():
+            s = str(v).strip().upper()
+            if not s or s == "NAN":
+                continue
+            if col == "marca_crm":
+                marcas.add(s)
+            else:
+                # Primera palabra significativa (>2 chars) como marca proxy
+                primera = s.split()[0] if s.split() else ""
+                if len(primera) > 2 and primera.isalpha():
+                    marcas.add(primera)
+    # Quitar palabras genéricas que generarían falsos positivos
+    GENERICAS = {"PRODUCTO", "ARTICULO", "ITEM", "DESC", "VARIOS", "OTROS"}
+    return marcas - GENERICAS
+
+
+def _filtrar_gestion_por_marcas_crm(df_gestion: pd.DataFrame, marcas: set) -> pd.DataFrame:
+    """
+    Filtra la gestión al subset Syngenta usando las marcas del CRM como
+    referencia. Más preciso que la clasificación con IA porque el CRM ES la
+    fuente oficial de Syngenta.
+
+    Incluye:
+      - Cualquier línea cuyo articulo contenga ALGUNA marca del CRM
+      - Todas las NC/ND (los archivos de NC/ND no traen articulo y pueden
+        afectar productos Syngenta — quedarán como SOLO_GESTION si el CRM
+        no las tiene, lo cual es una señal honesta para el auditor)
+    """
+    if df_gestion.empty:
+        return df_gestion
+    df = df_gestion.copy()
+    if "articulo" not in df.columns:
+        df["articulo"] = ""
+    if "tipo" not in df.columns:
+        df["tipo"] = ""
+
+    art_upper = df["articulo"].fillna("").astype(str).str.upper()
+    es_nc_nd = df["tipo"].astype(str).isin(["NC", "ND"])
+
+    if not marcas:
+        # Sin info de marcas → quedarse al menos con NC/ND
+        return df[es_nc_nd].copy()
+
+    # Match si CUALQUIER marca está contenida en el articulo
+    matches = art_upper.apply(lambda s: any(b in s for b in marcas))
+    return df[matches | es_nc_nd].copy()
 
 
 def _numero_crm_a_estandar(valor: str) -> str:
@@ -442,9 +513,23 @@ def ejecutar_paso3(
               f"{filtro_diag['filas_distribuidor']:,} de "
               f"{filtro_diag['filas_archivo_total']:,} filas")
 
-    # Preparar DataFrame de gestión (solo Syngenta)
+    # Preparar DataFrame de gestión (puede ser bajada_normalizada completa o
+    # bajada_syngenta ya filtrada — _preparar_gestion tolera ambos esquemas).
     df_gestion = _preparar_gestion(df_agro)
     df_crm = _preparar_crm(df_crm)
+
+    # ── Filtrar gestión usando el CRM como GROUND TRUTH ──────────────────────
+    # En vez de confiar en la clasificación con IA del Paso 2 (que tiene falsos
+    # positivos y negativos), usamos las marcas que aparecen en el CRM del
+    # distribuidor para decidir qué líneas de gestión son Syngenta. Esto
+    # garantiza que las dos sumas que comparamos (gestión vs CRM) midan
+    # exactamente el mismo universo de productos.
+    marcas_crm = _extraer_marcas_syngenta(df_crm)
+    if marcas_crm:
+        n_antes = len(df_gestion)
+        df_gestion = _filtrar_gestion_por_marcas_crm(df_gestion, marcas_crm)
+        print(f"[PASO 3] Filtro gestión por marcas Syngenta del CRM "
+              f"({len(marcas_crm)} marcas): {len(df_gestion):,} de {n_antes:,} líneas")
 
     # Cruce
     conciliacion = _cruzar_crm(df_gestion, df_crm)
@@ -693,7 +778,12 @@ def _cruzar_crm(df_gestion: pd.DataFrame, df_crm: pd.DataFrame) -> List[Dict]:
             monto_g = float(gr["monto"] or 0)
             monto_c = float(cr["monto"] or 0)
             diff_monto = round(monto_g - monto_c, 2)
-            estado = "OK" if abs(diff_monto) < 1.0 else "DIFERENCIA"
+            # OK si la diferencia es chica en absoluto O en relativo.
+            # Las diferencias chicas vienen casi siempre del TC distinto entre
+            # Syngenta (su TC interno) y el TC del usuario — no son hallazgos.
+            max_monto = max(abs(monto_g), abs(monto_c))
+            rel = abs(diff_monto) / max_monto if max_monto > 0 else 0
+            estado = "OK" if abs(diff_monto) < 5.0 or rel < 0.02 else "DIFERENCIA"
             tipo = str(gr["tipo"] or cr["tipo"] or "")
             if not tipo:
                 tipo = "NC" if (monto_c < 0 or monto_g < 0) else "FC"
