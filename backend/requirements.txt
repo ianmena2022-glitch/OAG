@@ -15,6 +15,9 @@ anthropic>=0.49.0
 pandas==2.2.3
 openpyxl==3.1.5
 xlrd==2.0.1
+# python-calamine: lector .xlsx en Rust, ~5x mas rapido que openpyxl.
+# Usado para leer/filtrar el CRM Syngenta (200k+ filas) sin tumbar el worker.
+python-calamine==0.2.3
 pdfplumber==0.11.4
 reportlab==4.2.5
 python-dateutil==2.9.0

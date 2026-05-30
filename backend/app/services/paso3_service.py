@@ -85,8 +85,129 @@ CRM_EXCLUSIONES = {
 
 
 def _solo_digitos(s) -> str:
-    """Devuelve solo los dígitos de una cadena. Para comparar CUITs sin formato."""
-    return "".join(c for c in str(s or "") if c.isdigit())
+    """
+    Devuelve solo los dígitos de una cadena. Para comparar CUITs sin formato.
+
+    Maneja el caso openpyxl/read_only en el que un CUIT guardado como número
+    en Excel viene como float 30708563311.0 → str sería "30708563311.0" y
+    los dígitos darían "307085633110" (12 cifras). Convertir a int primero
+    elimina el ".0" espurio.
+    """
+    if s is None:
+        return ""
+    if isinstance(s, float):
+        s = str(int(s)) if s.is_integer() else str(s)
+    return "".join(c for c in str(s) if c.isdigit())
+
+
+def _norm_header(s) -> str:
+    """Normaliza un nombre de columna a minúsculas sin acentos para matchear."""
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", str(s or "").lower())
+        if not unicodedata.combining(c)
+    ).strip()
+
+
+def _leer_crm_filtrado_streaming(path: str, cuit_distribuidor: str) -> tuple:
+    """
+    Lee el archivo CRM filtrando INLINE por el CUIT del distribuidor del
+    expediente, en lugar de cargar las 200k+ filas en pandas. Solo quedan en
+    memoria las filas del distribuidor actual (~unos miles).
+
+    Usa python-calamine (Rust, ~5x más rápido que openpyxl) si está disponible.
+    Cae a openpyxl read-only como fallback. Si ninguno aplica, devuelve
+    (None, diag) y el caller usa el camino tradicional con pd.read_excel.
+    """
+    cuit_norm = _solo_digitos(cuit_distribuidor)
+    if not cuit_norm:
+        return None, {"motivo": "expediente sin CUIT configurado"}
+
+    # ── Intento 1: calamine (rápido) ────────────────────────────────────────
+    try:
+        import python_calamine
+        wb = python_calamine.CalamineWorkbook.from_path(path)
+        sheet = wb.get_sheet_by_index(0)
+        data = sheet.to_python()
+        if not data:
+            return None, {"motivo": "archivo vacío"}
+        header = list(data[0])
+        rows_iter = iter(data[1:])
+        metodo = "streaming (calamine)"
+    except Exception as e:
+        # ── Intento 2: openpyxl como fallback ───────────────────────────────
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(path, read_only=True, data_only=True)
+            ws = wb.active
+            r_iter = ws.iter_rows(values_only=True)
+            try:
+                header = list(next(r_iter))
+            except StopIteration:
+                wb.close()
+                return None, {"motivo": "archivo vacío"}
+            rows_iter = r_iter
+            metodo = "streaming (openpyxl)"
+            # cerramos wb al final, no lo cerramos acá porque iter es perezoso
+        except Exception as e2:
+            return None, {"motivo": f"no se pudo leer como xlsx (calamine: {e}; openpyxl: {e2})"}
+
+    # ── Localizar columnas de CUIT y nombre del distribuidor ───────────────
+    cuit_col_idx = None
+    nombre_col_idx = None
+    for i, col in enumerate(header):
+        cn = _norm_header(col)
+        if cuit_col_idx is None and (
+            ("cuenta" in cn and "cuit" in cn) or
+            ("distribuidor" in cn and "cuit" in cn)
+        ):
+            cuit_col_idx = i
+        if nombre_col_idx is None and (
+            ("cuenta" in cn and ("nombre" in cn or "razon" in cn)) or
+            ("nombre" in cn and "distribuidor" in cn)
+        ):
+            nombre_col_idx = i
+    if cuit_col_idx is None:
+        return None, {"motivo": "no se encontró columna Cuenta: CUIT en el header"}
+
+    # ── Iterar filas, filtrar + enumerar distribuidores en una pasada ──────
+    filtradas = []
+    total = 0
+    distribuidores: dict = {}
+    for row in rows_iter:
+        total += 1
+        if cuit_col_idx >= len(row):
+            continue
+        val = row[cuit_col_idx]
+        if val is None:
+            continue
+        this_cuit = _solo_digitos(val)
+        if not this_cuit:
+            continue
+        if this_cuit not in distribuidores:
+            nombre = ""
+            if nombre_col_idx is not None and nombre_col_idx < len(row):
+                nombre = str(row[nombre_col_idx] or "")
+            distribuidores[this_cuit] = [nombre, 0]
+        distribuidores[this_cuit][1] += 1
+        if this_cuit == cuit_norm:
+            filtradas.append(row)
+
+    diag = {
+        "filas_archivo_total": total,
+        "filas_distribuidor": len(filtradas),
+        "metodo_lectura": metodo,
+        "distribuidores_archivo": sorted(
+            [{"cuit": c, "nombre": n, "filas": f} for c, (n, f) in distribuidores.items()],
+            key=lambda x: -x["filas"],
+        ),
+    }
+
+    if not filtradas:
+        return pd.DataFrame(columns=header), diag
+
+    df = pd.DataFrame(filtradas, columns=header)
+    return df, diag
 
 
 def _numero_crm_a_estandar(valor: str) -> str:
@@ -246,14 +367,75 @@ def ejecutar_paso3(
     """
     # Cargar datos
     df_agro = pd.read_excel(path_agroquimicos_syngenta, dtype=str)
-    df_crm, crm_info = leer_crm(path_crm)
 
-    # ── Filtrar el CRM al distribuidor del expediente ───────────────────────
-    df_crm, filtro_diag = _filtrar_crm_por_distribuidor(
-        df_crm, cuit_distribuidor, nombre_distribuidor,
-    )
-    print(f"[CRM] Filtro distribuidor: {filtro_diag['metodo_filtro']} → "
-          f"{filtro_diag['filas_distribuidor']:,} de {filtro_diag['filas_archivo_total']:,} filas")
+    # ── Lectura del CRM con FILTRO INLINE (streaming) ───────────────────────
+    # El CRM puede tener 200k+ filas (todos los distribuidores). Leer todo
+    # con pd.read_excel y filtrar después tumba el worker por memoria/tiempo.
+    # Estrategia: openpyxl read_only + iter_rows, descartando inline las filas
+    # que no son del distribuidor del expediente. Solo cargamos en memoria las
+    # filas relevantes (~6k de 188k en el caso real).
+    df_crm_stream, stream_diag = _leer_crm_filtrado_streaming(path_crm, cuit_distribuidor)
+
+    # Si streaming corrió OK pero no encontró filas para este CUIT, levantar
+    # error claro con la lista de distribuidores presentes (todo desde la
+    # MISMA pasada de streaming, sin volver a leer el archivo).
+    if df_crm_stream is not None and df_crm_stream.empty:
+        ejemplos = stream_diag.get("distribuidores_archivo", [])[:10]
+        lista = "\n".join(
+            f"  - CUIT {d['cuit']}: {d['nombre'] or '(sin nombre)'} ({d['filas']:,} filas)"
+            for d in ejemplos
+        )
+        raise ValueError(
+            f"En el archivo CRM no hay datos del distribuidor con CUIT "
+            f"'{cuit_distribuidor}' ({nombre_distribuidor or 'sin nombre'}). "
+            f"El archivo tiene {len(stream_diag.get('distribuidores_archivo', []))} "
+            f"distribuidores distintos en {stream_diag.get('filas_archivo_total', 0):,} "
+            f"filas. Los principales son:\n" + lista +
+            "\n\nVerificá que el CUIT del expediente esté bien escrito (editalo "
+            "con el botón ✏️ del Dashboard) y que el CRM incluya el período del "
+            "distribuidor que estás auditando."
+        )
+
+    if df_crm_stream is not None and not df_crm_stream.empty:
+        # Streaming OK y encontró filas → seguir con el df filtrado.
+        # Aplicamos detección de columnas con keywords sobre el df ya pequeño.
+        from ..ai.smart_parser import detectar_por_keywords
+        mapping = detectar_por_keywords(
+            [str(c) for c in df_crm_stream.columns], CRM_SCHEMA, CRM_EXCLUSIONES,
+        )
+        rename_map = {orig: std for std, orig in mapping.items() if orig}
+        df_crm = df_crm_stream.rename(columns=rename_map)
+        crm_info = {
+            "metodo": "streaming",
+            "confianza": 1.0,
+            "mapping": mapping,
+            "columnas_archivo": [str(c) for c in df_crm_stream.columns],
+            "columnas_faltantes": [c for c in CRM_SCHEMA if not mapping.get(c)],
+            "columnas_no_mapeadas": [c for c in df_crm_stream.columns if c not in mapping.values()],
+            "warnings": [],
+        }
+        filtro_diag = {
+            "filas_archivo_total": stream_diag["filas_archivo_total"],
+            "filas_distribuidor": stream_diag["filas_distribuidor"],
+            "metodo_filtro": f"CUIT exacto streaming ({cuit_distribuidor})",
+            "distribuidores_archivo": [],
+        }
+        print(f"[CRM] Streaming → {filtro_diag['filas_distribuidor']:,} de "
+              f"{filtro_diag['filas_archivo_total']:,} filas (sin cargar el resto en memoria)")
+    else:
+        # Fallback: streaming no aplica (no es xlsx, header sin 'Cuenta: CUIT',
+        # etc.) — caer al camino tradicional que carga todo y filtra después.
+        # Este camino también es el que dispara el mensaje de error útil
+        # listando los distribuidores presentes si el CUIT no matchea.
+        motivo = (stream_diag or {}).get("motivo", "desconocido")
+        print(f"[CRM] Streaming no aplicable ({motivo}) — fallback a lectura completa")
+        df_crm_full, crm_info = leer_crm(path_crm)
+        df_crm, filtro_diag = _filtrar_crm_por_distribuidor(
+            df_crm_full, cuit_distribuidor, nombre_distribuidor,
+        )
+        print(f"[CRM] Filtro distribuidor: {filtro_diag['metodo_filtro']} → "
+              f"{filtro_diag['filas_distribuidor']:,} de "
+              f"{filtro_diag['filas_archivo_total']:,} filas")
 
     # Preparar DataFrame de gestión (solo Syngenta)
     df_gestion = _preparar_gestion(df_agro)
