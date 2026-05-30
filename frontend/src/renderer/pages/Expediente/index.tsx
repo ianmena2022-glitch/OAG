@@ -1,10 +1,10 @@
 import React, { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { expedientesAPI } from '../../lib/api'
-import { useAuthStore, isAdminRole, canSeeLogs } from '../../store'
-import { cn, PASO_LABELS } from '../../lib/utils'
-import { Loader, CheckCircle, Circle, ArrowRight, Users, Terminal } from 'lucide-react'
+import { expedientesAPI, pasosAPI } from '../../lib/api'
+import { useAuthStore, isAdminRole, canSeeLogs, useNotificationStore } from '../../store'
+import { cn, PASO_LABELS, downloadBlob } from '../../lib/utils'
+import { Loader, CheckCircle, Circle, ArrowRight, Users, Terminal, Download } from 'lucide-react'
 import Paso1 from './Paso1'
 import Paso2 from './Paso2'
 import Paso3 from './Paso3'
@@ -35,7 +35,23 @@ export default function ExpedientePage() {
   const [colabOpen, setColabOpen] = useState(false)
   const [logsOpen, setLogsOpen] = useState(false)
   const currentUser = useAuthStore((s) => s.user)
+  const { push } = useNotificationStore()
   const puedeVerLogs = canSeeLogs(currentUser?.role)
+  const [exportando, setExportando] = useState(false)
+
+  const exportarPasoActual = async () => {
+    setExportando(true)
+    try {
+      const res = await pasosAPI.exportarPaso(Number(id), pasoActivo)
+      const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')
+      downloadBlob(res.data, `OAG_paso${pasoActivo}_exp${id}_${ts}.zip`)
+      push('success', `Paso ${pasoActivo} exportado`)
+    } catch (err: any) {
+      push('error', err.response?.data?.detail || `No se pudo exportar el Paso ${pasoActivo}`)
+    } finally {
+      setExportando(false)
+    }
+  }
 
   const { data: expediente, isLoading, refetch } = useQuery({
     queryKey: ['expediente', id],
@@ -97,6 +113,15 @@ export default function ExpedientePage() {
               {logsOpen ? 'Volver al paso' : 'Ver logs (técnico)'}
             </button>
           )}
+          <button
+            onClick={exportarPasoActual}
+            disabled={exportando}
+            className="mt-2 w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1.5 border border-oag-border rounded hover:bg-oag-light transition-colors text-oag-text disabled:opacity-50"
+            title="Descargar un .zip con todos los datos generados por este paso (para soporte)"
+          >
+            {exportando ? <Loader size={12} className="animate-spin" /> : <Download size={12} />}
+            Descargar paso {pasoActivo}
+          </button>
         </div>
 
         <div className="card overflow-hidden">

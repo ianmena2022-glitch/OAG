@@ -2,9 +2,12 @@
 Rutas unificadas para ejecutar los 6 pasos de auditoría.
 """
 import os
+import io
 import json
+import zipfile
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -826,4 +829,83 @@ def descargar_paso6(
         res.archivo_path,
         filename=f"OAG_Informe_Final_Exp{exp_id}.xlsx",
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ── EXPORT DE OUTPUT POR PASO (debug / soporte) ───────────────────────────────
+
+@router.get("/{paso}/exportar")
+def exportar_paso(
+    exp_id: int,
+    paso: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Exporta TODO lo que genera un paso como un .zip:
+      - _meta.json: metadatos del expediente y del paso
+      - datos.json: todos los subtipos con datos tabulares (conciliación,
+        resumen, totales, validación, etc.)
+      - archivos: cualquier .xlsx/.csv que el paso haya producido (bajada
+        normalizada, agroquímicos, syngenta, informes, etc.)
+    Útil para reportar bugs sin tener que copiar pantallas — adjuntar el zip
+    a un ticket y el dev tiene todo lo necesario para reproducir.
+    """
+    if paso < 1 or paso > 6:
+        raise HTTPException(400, "Paso debe ser 1-6")
+    exp = _get_exp(exp_id, db, current_user)
+    resultados = (
+        db.query(ResultadoPaso)
+        .filter(ResultadoPaso.expediente_id == exp_id, ResultadoPaso.paso == paso)
+        .all()
+    )
+    if not resultados:
+        raise HTTPException(404, f"Paso {paso} no ejecutado aún")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        # Metadata del expediente y del paso
+        meta = {
+            "expediente_id": exp_id,
+            "distribuidor": exp.nombre_distribuidor,
+            "cuit": exp.cuit_distribuidor,
+            "anio_analisis": exp.anio_analisis,
+            "paso": paso,
+            "exportado": datetime.utcnow().isoformat() + "Z",
+            "exportado_por": current_user.email,
+            "subtipos_presentes": [r.subtipo for r in resultados],
+        }
+        z.writestr("_meta.json",
+                   json.dumps(meta, ensure_ascii=False, indent=2, default=str))
+
+        # Datos tabulares
+        datos_dict = {}
+        for r in resultados:
+            if r.datos is not None:
+                datos_dict[r.subtipo] = r.datos
+        if datos_dict:
+            z.writestr(
+                "datos.json",
+                json.dumps(datos_dict, ensure_ascii=False, indent=2, default=str),
+            )
+
+        # Archivos físicos (xlsx, csv) generados por el paso
+        for r in resultados:
+            if r.archivo_path and os.path.exists(r.archivo_path):
+                arcname = f"archivos/{r.subtipo}_{os.path.basename(r.archivo_path)}"
+                try:
+                    z.write(r.archivo_path, arcname)
+                except Exception as e:
+                    z.writestr(f"archivos/_ERROR_{r.subtipo}.txt",
+                               f"No se pudo adjuntar {r.archivo_path}: {e}")
+
+    buf.seek(0)
+    fname = (
+        f"OAG_paso{paso}_exp{exp_id}_"
+        f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.zip"
+    )
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
