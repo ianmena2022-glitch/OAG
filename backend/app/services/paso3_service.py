@@ -129,14 +129,46 @@ def ejecutar_paso3(
 
 
 def _preparar_gestion(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normaliza el DataFrame de gestión Syngenta para el cruce con CRM.
+
+    Es tolerante a los dos esquemas en los que puede venir el archivo:
+      - Esquema nuevo (Paso 1 line-item): tipo, numero, fecha, cliente,
+        cuit_cliente, articulo, monto_usd, ...
+      - Esquema viejo: tipo_comprobante, numero_comprobante, ...
+    Y también a columnas faltantes (ej: 'cantidad' puede no existir todavía).
+    """
     df = df.copy()
-    df["fecha"] = pd.to_datetime(df.get("fecha", ""), errors="coerce")
-    df["tipo_comprobante"] = df.get("tipo_comprobante", "FC").apply(normalizar_tipo_comprobante)
-    df["numero_comprobante"] = df.get("numero_comprobante", "").astype(str).str.strip()
-    df["cuit_cliente"] = df.get("cuit_cliente", "").astype(str).str.strip()
-    df["articulo"] = df.get("articulo", "").astype(str).str.strip().str.upper()
-    df["cantidad"] = pd.to_numeric(df.get("cantidad"), errors="coerce").fillna(0)
-    df["monto_usd"] = pd.to_numeric(df.get("monto_usd", df.get("monto_total", 0)), errors="coerce").fillna(0)
+    cols = set(df.columns)
+
+    def _col_or_default(*names, default=""):
+        """Devuelve la primera columna que exista como Series, sino una Serie con default."""
+        for n in names:
+            if n in cols:
+                return df[n]
+        return pd.Series([default] * len(df), index=df.index)
+
+    df["fecha"] = pd.to_datetime(_col_or_default("fecha", default=""), errors="coerce")
+
+    # tipo_comprobante: nuevo "tipo" o viejo "tipo_comprobante"
+    tipo_series = _col_or_default("tipo_comprobante", "tipo", default="FC")
+    df["tipo_comprobante"] = tipo_series.astype(str).apply(normalizar_tipo_comprobante)
+
+    df["numero_comprobante"] = _col_or_default(
+        "numero_comprobante", "numero", default=""
+    ).astype(str).str.strip()
+    df["cuit_cliente"] = _col_or_default("cuit_cliente", default="").astype(str).str.strip()
+    df["articulo"] = _col_or_default("articulo", default="").astype(str).str.strip().str.upper()
+
+    # cantidad puede no existir si la bajada se generó con la versión vieja
+    # de Paso 1 (que no la capturaba) — default 0.
+    df["cantidad"] = pd.to_numeric(
+        _col_or_default("cantidad", default=0), errors="coerce"
+    ).fillna(0)
+
+    df["monto_usd"] = pd.to_numeric(
+        _col_or_default("monto_usd", "monto_total", default=0), errors="coerce"
+    ).fillna(0)
     return df
 
 

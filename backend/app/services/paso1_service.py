@@ -253,6 +253,11 @@ GESTION_SCHEMA = {
         "monto usd", "monto dólares", "usd", "u$s", "dolares total",
         "dólares total", "total dol", "imp usd", "total $u",
     ],
+    # Cantidad/unidades por línea — usado en Paso 3 para cruzar con CRM
+    "cantidad": [
+        "cantidad", "cant.", "cant", "qty", "unidades", "vol",
+        "volumen", "kilos", "kg", "litros", "lts",
+    ],
 }
 
 GESTION_EXCLUSIONES = {
@@ -864,6 +869,7 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
     col_total     = mapping.get("monto_total")
     col_total_usd = mapping.get("monto_total_usd")  # columna explícita en USD
     col_articulo  = mapping.get("articulo")
+    col_cantidad  = mapping.get("cantidad")
 
     # Reportes agrupados por producto ("Producto: X" como cabecera de grupo):
     # reconstruir el artículo por línea con forward-fill y descartar las cabeceras.
@@ -1027,6 +1033,7 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
                 "cliente": cliente_raw,
                 "cuit_cliente": str(row.get(col_cuit, "") if col_cuit else ""),
                 "articulo": str(row.get(col_articulo, "") if col_articulo else "").strip(),
+                "cantidad": normalizar_monto(row.get(col_cantidad)) if col_cantidad else 0,
                 "archivo": archivo,
                 "moneda": moneda,
                 "monto_original": monto_original,
