@@ -75,10 +75,15 @@ CRM_SCHEMA = {
 # "Vendido a:" (distribuidor vs cliente final), y para que el número de
 # factura no se confunda con un número de cuenta interno de Syngenta.
 CRM_EXCLUSIONES = {
-    "cuit_cliente_crm":    ["cuenta", "distribuidor"],
-    "cliente_crm":         ["cuenta", "distribuidor"],
-    "numero_crm":          ["cuit", "cuil", "doc", "cuenta", "vendido a"],
-    "tipo_crm":            ["cuit", "cuil", "doc", "cuenta", "vendido a"],
+    # Para distinguir "Cuenta:" (distribuidor) vs "Vendido a:" (cliente)
+    # NO se usan exclusiones por "cuenta" porque "Vendido a: Nombre de la cuenta"
+    # también la contiene. La separación viene dada por el ORDEN del schema
+    # (distribuidor primero → consume sus columnas) y el used_cols del parser.
+    # Las exclusiones acá son solo para evitar choques duros con CUIT/CUIL/PV.
+    "cuit_cliente_crm":    ["distribuidor", "numero"],
+    "cliente_crm":         ["distribuidor", "cuit", "cuil", "numero"],
+    "numero_crm":          ["cuit", "cuil", "cuenta:", "vendido a"],
+    "tipo_crm":            ["cuit", "cuil", "cuenta:", "vendido a"],
     "cantidad_crm":        ["monto", "importe", "precio", "price"],
     "producto_crm":        ["codigo", "código", "code"],
 }
@@ -583,99 +588,166 @@ def _preparar_crm(df: pd.DataFrame) -> pd.DataFrame:
     df["numero_crm"] = _serie("numero_crm", default="").astype(str).apply(_numero_crm_a_estandar)
     df["cuit_cliente_crm"] = _serie("cuit_cliente_crm", default="").astype(str).apply(_solo_digitos)
     df["producto_crm"] = _serie("producto_crm", default="").astype(str).str.strip().str.upper()
+    df["cliente_crm"] = _serie("cliente_crm", default="").astype(str).str.strip()
     df["cantidad_crm"] = pd.to_numeric(_serie("cantidad_crm", default=0), errors="coerce").fillna(0)
     df["monto_crm"] = pd.to_numeric(_serie("monto_crm", default=0), errors="coerce").fillna(0)
+    # tipo_crm: el CRM Syngenta usa "FC"/"RM"/"NC" en "Tipo de documento".
+    # RM (= "Remito"/"Recibo de Mercadería") se trata como FC para signo.
+    df["tipo_crm"] = _serie("tipo_crm", default="").astype(str).apply(normalizar_tipo_comprobante)
     return df
 
 
 def _cruzar_crm(df_gestion: pd.DataFrame, df_crm: pd.DataFrame) -> List[Dict]:
     """
-    Cruza por: producto + nro comprobante + cuit cliente.
+    Cruce gestión vs CRM AGREGADO POR COMPROBANTE.
+
+    Por qué agregado y no por línea:
+      - Los archivos de NC/ND en gestión no traen artículo ni CUIT del cliente
+        (son a nivel comprobante), por eso un match línea-a-línea
+        articulo+numero+cuit nunca encontraba nada para las NC.
+      - Las FACTURAS del ERP a veces no traen Punto de Venta (PV=00000),
+        mientras que el CRM sí tiene el PV real → los números no coincidirían
+        exactamente aunque sean el mismo comprobante.
+      - Los nombres de producto difieren entre el ERP del distribuidor y la
+        "Descripción Homogénea" de Syngenta — matching exacto falla.
+
+    Solución: agrupar ambos lados por NÚMERO FISCAL (los últimos 8 dígitos del
+    número, ignorando PV y prefijos). Sumar cantidad y monto por comprobante y
+    comparar. Esto es lo que un auditor mira: "¿cuánto facturó el distribuidor
+    por este comprobante vs cuánto reportó al CRM?".
+
+    Cada fila de salida = un comprobante. Productos quedan como texto
+    informativo (lista comma-separated de lo que aparece en cada lado).
     """
+    def _num_fiscal(s):
+        """Últimos 8 dígitos del número de comprobante (la parte fiscal)."""
+        d = "".join(c for c in str(s or "") if c.isdigit())
+        return d[-8:].zfill(8) if d else ""
+
+    def _primer_no_vacio(serie):
+        for v in serie:
+            sv = str(v or "").strip()
+            if sv:
+                return sv
+        return ""
+
+    def _productos_concat(serie, max_len=300):
+        unicos = sorted({str(v).strip() for v in serie if str(v or "").strip()})
+        s = ", ".join(unicos)
+        return s if len(s) <= max_len else s[:max_len - 1] + "…"
+
+    # ── Preparar gestión ────────────────────────────────────────────────────
+    g = df_gestion.copy()
+    g["__num__"] = g["numero_comprobante"].apply(_num_fiscal)
+    g = g[g["__num__"] != ""]
+    if "tipo_comprobante" not in g.columns:
+        g["tipo_comprobante"] = ""
+    if "articulo" not in g.columns:
+        g["articulo"] = ""
+
+    g_agg = g.groupby("__num__", dropna=False).agg(
+        numero=("numero_comprobante", _primer_no_vacio),
+        fecha=("fecha", "first"),
+        cuit=("cuit_cliente", _primer_no_vacio),
+        tipo=("tipo_comprobante", _primer_no_vacio),
+        productos=("articulo", _productos_concat),
+        cantidad=("cantidad", "sum"),
+        monto=("monto_usd", "sum"),
+    ).reset_index()
+
+    # ── Preparar CRM ────────────────────────────────────────────────────────
+    c = df_crm.copy()
+    c["__num__"] = c["numero_crm"].apply(_num_fiscal)
+    c = c[c["__num__"] != ""]
+    if "cliente_crm" not in c.columns:
+        c["cliente_crm"] = ""
+    if "tipo_crm" not in c.columns:
+        c["tipo_crm"] = ""
+
+    c_agg = c.groupby("__num__", dropna=False).agg(
+        numero=("numero_crm", _primer_no_vacio),
+        fecha=("fecha_crm", "first"),
+        cuit=("cuit_cliente_crm", _primer_no_vacio),
+        cliente=("cliente_crm", _primer_no_vacio),
+        tipo=("tipo_crm", _primer_no_vacio),
+        productos=("producto_crm", _productos_concat),
+        cantidad=("cantidad_crm", "sum"),
+        monto=("monto_crm", "sum"),
+    ).reset_index()
+
+    g_map = {r["__num__"]: r for _, r in g_agg.iterrows()}
+    c_map = {r["__num__"]: r for _, r in c_agg.iterrows()}
+
+    def _fmt_fecha(v):
+        s = str(v or "")[:10]
+        return s if s and s != "NaT" else ""
+
     conciliacion = []
+    for num in set(g_map) | set(c_map):
+        gr = g_map.get(num)
+        cr = c_map.get(num)
 
-    # Crear keys
-    def key_gestion(row):
-        return f"{row['articulo']}||{row['numero_comprobante']}||{row['cuit_cliente']}"
-
-    def key_crm(row):
-        return f"{row['producto_crm']}||{row['numero_crm']}||{row['cuit_cliente_crm']}"
-
-    gestion_map = {}
-    for _, row in df_gestion.iterrows():
-        k = key_gestion(row)
-        gestion_map.setdefault(k, []).append(row)
-
-    crm_map = {}
-    for _, row in df_crm.iterrows():
-        k = key_crm(row)
-        crm_map.setdefault(k, []).append(row)
-
-    all_keys = set(gestion_map.keys()) | set(crm_map.keys())
-
-    for k in all_keys:
-        g_rows = gestion_map.get(k, [])
-        c_rows = crm_map.get(k, [])
-
-        if g_rows and c_rows:
-            g = g_rows[0]
-            c = c_rows[0]
-
-            cant_g = float(g.get("cantidad", 0))
-            cant_c = float(c.get("cantidad_crm", 0))
-            monto_g = float(g.get("monto_usd", 0))
-            monto_c = float(c.get("monto_crm", 0))
-            diff_cant = round(cant_g - cant_c, 4)
+        if gr is not None and cr is not None:
+            cant_g = float(gr["cantidad"] or 0)
+            cant_c = float(cr["cantidad"] or 0)
+            monto_g = float(gr["monto"] or 0)
+            monto_c = float(cr["monto"] or 0)
             diff_monto = round(monto_g - monto_c, 2)
-
             estado = "OK" if abs(diff_monto) < 1.0 else "DIFERENCIA"
-
+            tipo = str(gr["tipo"] or cr["tipo"] or "")
+            if not tipo:
+                tipo = "NC" if (monto_c < 0 or monto_g < 0) else "FC"
             conciliacion.append({
-                "producto": str(g.get("articulo", "")),
-                "fecha": str(g.get("fecha", ""))[:10],
-                "tipo_comprobante": str(g.get("tipo_comprobante", "")),
-                "numero_comprobante": str(g.get("numero_comprobante", "")),
-                "cuit_cliente": str(g.get("cuit_cliente", "")),
+                "numero_comprobante": str(gr["numero"] or cr["numero"]),
+                "fecha": _fmt_fecha(gr["fecha"] or cr["fecha"]),
+                "tipo_comprobante": tipo,
+                "cuit_cliente": gr["cuit"] or cr["cuit"],
+                "cliente": cr["cliente"],
+                "producto": gr["productos"] or cr["productos"],
                 "cantidad_gestion": round(cant_g, 4),
                 "cantidad_crm": round(cant_c, 4),
-                "diferencia_cantidad": round(diff_cant, 4),
+                "diferencia_cantidad": round(cant_g - cant_c, 4),
                 "monto_gestion_usd": round(monto_g, 2),
                 "monto_crm_usd": round(monto_c, 2),
-                "diferencia_monto": round(diff_monto, 2),
+                "diferencia_monto": diff_monto,
                 "justificacion": "" if estado == "OK" else "Pendiente de análisis",
                 "estado": estado,
             })
-        elif g_rows:
-            g = g_rows[0]
+        elif gr is not None:
+            monto_g = float(gr["monto"] or 0)
+            tipo = str(gr["tipo"]) or ("NC" if monto_g < 0 else "FC")
             conciliacion.append({
-                "producto": str(g.get("articulo", "")),
-                "fecha": str(g.get("fecha", ""))[:10],
-                "tipo_comprobante": str(g.get("tipo_comprobante", "")),
-                "numero_comprobante": str(g.get("numero_comprobante", "")),
-                "cuit_cliente": str(g.get("cuit_cliente", "")),
-                "cantidad_gestion": float(g.get("cantidad", 0)),
+                "numero_comprobante": str(gr["numero"]),
+                "fecha": _fmt_fecha(gr["fecha"]),
+                "tipo_comprobante": tipo,
+                "cuit_cliente": gr["cuit"],
+                "cliente": "",
+                "producto": gr["productos"],
+                "cantidad_gestion": round(float(gr["cantidad"] or 0), 4),
                 "cantidad_crm": 0,
-                "diferencia_cantidad": float(g.get("cantidad", 0)),
-                "monto_gestion_usd": float(g.get("monto_usd", 0)),
+                "diferencia_cantidad": round(float(gr["cantidad"] or 0), 4),
+                "monto_gestion_usd": round(monto_g, 2),
                 "monto_crm_usd": 0,
-                "diferencia_monto": float(g.get("monto_usd", 0)),
-                "justificacion": "Venta sin reporte en CRM",
+                "diferencia_monto": round(monto_g, 2),
+                "justificacion": "Venta facturada sin reporte en CRM",
                 "estado": "SOLO_GESTION",
             })
         else:
-            c = c_rows[0]
+            monto_c = float(cr["monto"] or 0)
+            tipo = str(cr["tipo"]) or ("NC" if monto_c < 0 else "FC")
             conciliacion.append({
-                "producto": str(c.get("producto_crm", "")),
-                "fecha": str(c.get("fecha_crm", ""))[:10],
-                "tipo_comprobante": "",
-                "numero_comprobante": str(c.get("numero_crm", "")),
-                "cuit_cliente": str(c.get("cuit_cliente_crm", "")),
+                "numero_comprobante": str(cr["numero"]),
+                "fecha": _fmt_fecha(cr["fecha"]),
+                "tipo_comprobante": tipo,
+                "cuit_cliente": cr["cuit"],
+                "cliente": cr["cliente"],
+                "producto": cr["productos"],
                 "cantidad_gestion": 0,
-                "cantidad_crm": float(c.get("cantidad_crm", 0)),
-                "diferencia_cantidad": -float(c.get("cantidad_crm", 0)),
+                "cantidad_crm": round(float(cr["cantidad"] or 0), 4),
+                "diferencia_cantidad": -round(float(cr["cantidad"] or 0), 4),
                 "monto_gestion_usd": 0,
-                "monto_crm_usd": float(c.get("monto_crm", 0)),
-                "diferencia_monto": -float(c.get("monto_crm", 0)),
+                "monto_crm_usd": round(monto_c, 2),
+                "diferencia_monto": -round(monto_c, 2),
                 "justificacion": "Reportado en CRM sin factura correspondiente en gestión",
                 "estado": "SOLO_CRM",
             })
