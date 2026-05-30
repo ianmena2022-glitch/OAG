@@ -69,7 +69,11 @@ def _save_resultado(db, exp_id, paso, subtipo, datos=None, archivo_path=None):
 
 
 def _marcar_paso_completado(exp, paso, db):
-    completados = exp.pasos_completados or []
+    # IMPORTANTE: hacer una COPIA de la lista. Si modificamos in-place la lista
+    # existente y reasignamos la misma referencia, SQLAlchemy no detecta el
+    # cambio en la columna JSON y el commit es un no-op. Esto hacía que solo
+    # Paso 1 se marcara (porque arrancaba en None) y los siguientes nunca.
+    completados = list(exp.pasos_completados or [])
     if paso not in completados:
         completados.append(paso)
     exp.pasos_completados = completados
