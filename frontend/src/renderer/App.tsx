@@ -1,6 +1,6 @@
 import React from 'react'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { useAuthStore } from './store'
+import { useAuthStore, isAdminRole } from './store'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import ExpedientePage from './pages/Expediente'
@@ -17,7 +17,7 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { user } = useAuthStore()
-  if (!user || user.role !== 'ADMIN') return <Navigate to="/" replace />
+  if (!user || !isAdminRole(user.role)) return <Navigate to="/" replace />
   return <>{children}</>
 }
 

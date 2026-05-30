@@ -77,6 +77,15 @@ export const expedientesAPI = {
     api.delete(`/api/expedientes/${id}/colaboradores/${userId}`),
 }
 
+// ── Logs (TECNICO / ADMIN) ────────────────────────────────────────────────────
+
+export const logsAPI = {
+  listar: (expId: number, limit = 500) =>
+    api.get(`/api/expedientes/${expId}/logs`, { params: { limit } }),
+  descargar: (expId: number) =>
+    api.get(`/api/expedientes/${expId}/logs/descargar`, { responseType: 'blob' }),
+}
+
 // ── Pasos ─────────────────────────────────────────────────────────────────────
 
 export const pasosAPI = {

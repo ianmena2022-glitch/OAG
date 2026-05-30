@@ -2,9 +2,9 @@ import React, { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { expedientesAPI } from '../../lib/api'
-import { useAuthStore } from '../../store'
+import { useAuthStore, isAdminRole, canSeeLogs } from '../../store'
 import { cn, PASO_LABELS } from '../../lib/utils'
-import { Loader, CheckCircle, Circle, ArrowRight, Users } from 'lucide-react'
+import { Loader, CheckCircle, Circle, ArrowRight, Users, Terminal } from 'lucide-react'
 import Paso1 from './Paso1'
 import Paso2 from './Paso2'
 import Paso3 from './Paso3'
@@ -12,6 +12,7 @@ import Paso4 from './Paso4'
 import Paso5 from './Paso5'
 import Paso6 from './Paso6'
 import ColaboradoresPanel from '../../components/ColaboradoresPanel'
+import LogsPanel from '../../components/LogsPanel'
 
 const PASO_COMPONENTS: Record<number, React.ComponentType<{ expediente: any }>> = {
   1: Paso1,
@@ -32,7 +33,9 @@ export default function ExpedientePage() {
   const { id } = useParams<{ id: string }>()
   const [pasoActivo, setPasoActivo] = useState(1)
   const [colabOpen, setColabOpen] = useState(false)
+  const [logsOpen, setLogsOpen] = useState(false)
   const currentUser = useAuthStore((s) => s.user)
+  const puedeVerLogs = canSeeLogs(currentUser?.role)
 
   const { data: expediente, isLoading, refetch } = useQuery({
     queryKey: ['expediente', id],
@@ -41,7 +44,7 @@ export default function ExpedientePage() {
   })
 
   const esColaborador =
-    expediente && currentUser && expediente.user_id !== currentUser.id && currentUser.role !== 'ADMIN'
+    expediente && currentUser && expediente.user_id !== currentUser.id && !isAdminRole(currentUser.role)
 
   if (isLoading) {
     return (
@@ -80,6 +83,20 @@ export default function ExpedientePage() {
             <Users size={12} />
             Colaboradores
           </button>
+          {puedeVerLogs && (
+            <button
+              onClick={() => setLogsOpen(!logsOpen)}
+              className={cn(
+                'mt-2 w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1.5 border rounded transition-colors',
+                logsOpen
+                  ? 'border-purple-300 bg-purple-50 text-purple-700'
+                  : 'border-oag-border text-oag-text hover:bg-oag-light'
+              )}
+            >
+              <Terminal size={12} />
+              {logsOpen ? 'Volver al paso' : 'Ver logs (técnico)'}
+            </button>
+          )}
         </div>
 
         <div className="card overflow-hidden">
@@ -118,9 +135,13 @@ export default function ExpedientePage() {
         </div>
       </div>
 
-      {/* Contenido del paso */}
+      {/* Contenido del paso (o logs si el técnico los pidió) */}
       <div className="flex-1 min-w-0">
-        {PasoComponent && <PasoComponent expediente={{ ...expediente, refetch }} />}
+        {logsOpen && puedeVerLogs ? (
+          <LogsPanel expedienteId={Number(id)} />
+        ) : (
+          PasoComponent && <PasoComponent expediente={{ ...expediente, refetch }} />
+        )}
       </div>
 
       {colabOpen && (

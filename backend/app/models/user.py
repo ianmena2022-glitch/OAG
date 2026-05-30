@@ -7,6 +7,9 @@ from ..core.database import Base
 class UserRole(str, enum.Enum):
     ADMIN = "ADMIN"
     AUDITOR = "AUDITOR"
+    # TECNICO: rol para soporte/debugging. Tiene los mismos permisos que ADMIN
+    # PLUS acceso a los logs detallados de ejecución por expediente.
+    TECNICO = "TECNICO"
 
 
 class User(Base):

@@ -121,6 +121,27 @@ class Glosario(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class LogEvento(Base):
+    """
+    Log estructurado por expediente. Captura qué pasó en cada paso
+    (ejecución, duración, archivos procesados, mappings detectados, errores).
+    Pensado para que el rol TECNICO pueda debuggear sin pedir acceso al server.
+    """
+    __tablename__ = "logs_evento"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    expediente_id = Column(Integer, ForeignKey("expedientes.id", ondelete="CASCADE"),
+                          nullable=True, index=True)
+    user_id       = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    paso          = Column(Integer, nullable=True)              # 1..6 o null
+    nivel         = Column(String(20), default="info", nullable=False)  # info|warning|error
+    evento        = Column(String(100), nullable=False)         # tag corto: "paso_ejecutado"
+    mensaje       = Column(String(2000), nullable=False)        # texto humano
+    contexto      = Column(JSON, nullable=True)                 # datos estructurados
+    duracion_ms   = Column(Integer, nullable=True)              # si aplica
+    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
 class AnotacionConciliacion(Base):
     """
     Anotaciones manuales del auditor sobre comprobantes de la conciliación.

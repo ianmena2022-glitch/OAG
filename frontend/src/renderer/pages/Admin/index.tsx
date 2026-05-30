@@ -212,6 +212,7 @@ function TabUsuarios() {
               <select className="input-field" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                 <option value="AUDITOR">Auditor</option>
                 <option value="ADMIN">Administrador</option>
+                <option value="TECNICO">Técnico (admin + logs de debugging)</option>
               </select>
             </div>
           </div>
@@ -247,9 +248,13 @@ function TabUsuarios() {
                   <td className="table-cell text-oag-muted">{u.email}</td>
                   <td className="table-cell">
                     <span className={cn('px-2 py-0.5 rounded text-xs font-medium',
-                      u.role === 'ADMIN' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'
+                      u.role === 'ADMIN' ? 'bg-blue-100 text-blue-700'
+                        : u.role === 'TECNICO' ? 'bg-purple-100 text-purple-700'
+                        : 'bg-gray-100 text-gray-700'
                     )}>
-                      {u.role === 'ADMIN' ? 'Administrador' : 'Auditor'}
+                      {u.role === 'ADMIN' ? 'Administrador'
+                        : u.role === 'TECNICO' ? 'Técnico'
+                        : 'Auditor'}
                     </span>
                   </td>
                   <td className="table-cell">

@@ -19,6 +19,8 @@ from ...models.expediente import (
 from ...services import paso1_service, paso2_service, paso3_service
 from ...services import paso4_service, paso5_service, paso6_service
 from ...ai.validator import validar_paso, combinar_validacion
+from ...core.logger import log as _log
+import time
 
 router = APIRouter(prefix="/expedientes/{exp_id}/pasos", tags=["pasos"])
 
@@ -85,6 +87,26 @@ def _marcar_paso_completado(exp, paso, db):
     db.commit()
 
 
+def _log_paso_inicio(db, exp_id, user_id, paso):
+    _log(db, expediente_id=exp_id, user_id=user_id, paso=paso,
+         nivel="info", evento="paso_iniciado", mensaje=f"Paso {paso} iniciado")
+
+
+def _log_paso_fin(db, exp_id, user_id, paso, t0, contexto=None):
+    _log(db, expediente_id=exp_id, user_id=user_id, paso=paso,
+         nivel="info", evento="paso_completado",
+         mensaje=f"Paso {paso} ejecutado correctamente",
+         contexto=contexto, duracion_ms=int((time.time() - t0) * 1000))
+
+
+def _log_paso_error(db, exp_id, user_id, paso, t0, exc, tb_str=None):
+    _log(db, expediente_id=exp_id, user_id=user_id, paso=paso,
+         nivel="error", evento="paso_error",
+         mensaje=f"Paso {paso} falló: {type(exc).__name__}: {str(exc)[:500] or '(sin mensaje)'}",
+         contexto={"traceback": tb_str} if tb_str else None,
+         duracion_ms=int((time.time() - t0) * 1000))
+
+
 def _safe_validar(db, exp_id: int, paso: int, build_validacion):
     """
     Corre la validación (IA + guardas) de forma defensiva. Si algo falla
@@ -133,9 +155,13 @@ def ejecutar_paso1(
     path_emitidos = _get_archivo_path(exp_id, TipoArchivo.COMPROBANTES_EMITIDOS, db)
     path_tc = _get_archivo_path(exp_id, TipoArchivo.TIPOS_CAMBIO, db)
 
+    _t0 = time.time()
+    _log_paso_inicio(db, exp_id, current_user.id, 1)
+    import traceback
     try:
         resultado = paso1_service.ejecutar_paso1(paths_bajada, path_emitidos, path_tc, exp_id)
     except Exception as e:
+        _log_paso_error(db, exp_id, current_user.id, 1, _t0, e, traceback.format_exc())
         raise HTTPException(500, f"Error en Paso 1: {str(e)}")
 
     _save_resultado(db, exp_id, 1, "conciliacion", datos=resultado["conciliacion"])
@@ -149,6 +175,10 @@ def ejecutar_paso1(
     # avanzar al siguiente.
     _marcar_paso_completado(exp, 1, db)
     _safe_validar(db, exp_id, 1, lambda: resultado.get("validacion"))
+    _log_paso_fin(db, exp_id, current_user.id, 1, _t0, contexto={
+        "resumen": resultado.get("resumen"),
+        "archivos_gestion": len(paths_bajada),
+    })
 
     return {
         "resumen": resultado["resumen"],
@@ -383,6 +413,9 @@ def ejecutar_paso2(
         col = df_esp.columns[0]
         clientes_especiales = df_esp[col].dropna().str.strip().str.upper().tolist()
 
+    _t0 = time.time()
+    _log_paso_inicio(db, exp_id, current_user.id, 2)
+    import traceback
     try:
         resultado = paso2_service.ejecutar_paso2(
             bajada_res.archivo_path,
@@ -392,6 +425,7 @@ def ejecutar_paso2(
             exp.anio_analisis,
         )
     except Exception as e:
+        _log_paso_error(db, exp_id, current_user.id, 2, _t0, e, traceback.format_exc())
         raise HTTPException(500, f"Error en Paso 2: {str(e)}")
 
     _save_resultado(db, exp_id, 2, "ranking_clientes", datos=resultado["ranking_clientes"])
@@ -409,6 +443,9 @@ def ejecutar_paso2(
         resultado.get("guardas", []),
         validar_paso(2, resultado["totales"], muestra=resultado["ranking_clientes"][:5]),
     ))
+    _log_paso_fin(db, exp_id, current_user.id, 2, _t0, contexto={
+        "totales": resultado.get("totales"),
+    })
 
     return {
         "totales": resultado["totales"],
@@ -509,6 +546,8 @@ def ejecutar_paso3(
             "monto_usd": a.monto_gestion_usd,
         })
 
+    _t0 = time.time()
+    _log_paso_inicio(db, exp_id, current_user.id, 3)
     # Capturamos TODO con traceback completo para que el toast del frontend muestre
     # el detalle real en vez de "Internal Server Error" genérico.
     import traceback
@@ -528,6 +567,7 @@ def ejecutar_paso3(
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[PASO 3] EXCEPTION: {tb}")
+        _log_paso_error(db, exp_id, current_user.id, 3, _t0, e, tb)
         raise HTTPException(500, f"Error en Paso 3: {type(e).__name__}: {str(e) or '(sin mensaje)'}")
 
     # Marcar completado primero — la validación que sigue es best-effort
@@ -535,6 +575,11 @@ def ejecutar_paso3(
     validacion = _safe_validar(db, exp_id, 3, lambda: validar_paso(
         3, resultado["resumen"], muestra=resultado["conciliacion"][:5],
     ))
+    _log_paso_fin(db, exp_id, current_user.id, 3, _t0, contexto={
+        "resumen": resultado.get("resumen"),
+        "filtro_distribuidor": resultado.get("filtro_distribuidor"),
+        "anotaciones_manuales": len(anotaciones_manuales),
+    })
 
     return {**resultado, "validacion": validacion}
 
@@ -579,11 +624,15 @@ def ejecutar_paso4(
         col = df_prov.columns[0]
         proveedores_apertura = df_prov[col].dropna().str.strip().str.upper().tolist()
 
+    _t0 = time.time()
+    _log_paso_inicio(db, exp_id, current_user.id, 4)
+    import traceback
     try:
         resultado = paso4_service.ejecutar_paso4(
             path_recibidos, path_tc, proveedores_apertura, exp.anio_analisis
         )
     except Exception as e:
+        _log_paso_error(db, exp_id, current_user.id, 4, _t0, e, traceback.format_exc())
         raise HTTPException(500, f"Error en Paso 4: {str(e)}")
 
     _save_resultado(db, exp_id, 4, "resumen", datos=resultado["resumen"])
@@ -596,6 +645,9 @@ def ejecutar_paso4(
     validacion = _safe_validar(db, exp_id, 4, lambda: validar_paso(
         4, resultado["totales"], muestra=resultado["resumen"][:5],
     ))
+    _log_paso_fin(db, exp_id, current_user.id, 4, _t0, contexto={
+        "totales": resultado.get("totales"),
+    })
 
     return {
         "totales": resultado["totales"],
@@ -655,12 +707,16 @@ def ejecutar_paso5(
         "anio_analisis": exp.anio_analisis,
     }
 
+    _t0 = time.time()
+    _log_paso_inicio(db, exp_id, current_user.id, 5)
+    import traceback
     try:
         resultado = paso5_service.ejecutar_paso5(
             resumen_compras, tabla_apertura, conciliacion_crm,
             expediente_info, exp_id
         )
     except Exception as e:
+        _log_paso_error(db, exp_id, current_user.id, 5, _t0, e, traceback.format_exc())
         raise HTTPException(500, f"Error en Paso 5: {str(e)}")
 
     _save_resultado(db, exp_id, 5, "informe", archivo_path=resultado["excel_path"])
@@ -669,6 +725,7 @@ def ejecutar_paso5(
     # Marcar completado primero — la validación que sigue es best-effort
     _marcar_paso_completado(exp, 5, db)
     validacion = _safe_validar(db, exp_id, 5, lambda: validar_paso(5, resultado["totales"]))
+    _log_paso_fin(db, exp_id, current_user.id, 5, _t0, contexto={"totales": resultado.get("totales")})
 
     return {**resultado, "validacion": validacion}
 
@@ -728,12 +785,16 @@ def ejecutar_paso6(
         "anio_analisis": exp.anio_analisis,
     }
 
+    _t0 = time.time()
+    _log_paso_inicio(db, exp_id, current_user.id, 6)
+    import traceback
     try:
         resultado = paso6_service.ejecutar_paso6(
             resumen_compras, tabla_apertura, conciliacion_crm,
             glosario_list, expediente_info, exp_id
         )
     except Exception as e:
+        _log_paso_error(db, exp_id, current_user.id, 6, _t0, e, traceback.format_exc())
         raise HTTPException(500, f"Error en Paso 6: {str(e)}")
 
     _save_resultado(db, exp_id, 6, "informe", archivo_path=resultado["excel_path"])
@@ -742,6 +803,7 @@ def ejecutar_paso6(
     # Marcar completado primero — la validación que sigue es best-effort
     _marcar_paso_completado(exp, 6, db)
     validacion = _safe_validar(db, exp_id, 6, lambda: validar_paso(6, resultado["totales"]))
+    _log_paso_fin(db, exp_id, current_user.id, 6, _t0, contexto={"totales": resultado.get("totales")})
 
     return {**resultado, "validacion": validacion}
 

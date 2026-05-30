@@ -1,12 +1,19 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
+export type UserRole = 'ADMIN' | 'AUDITOR' | 'TECNICO'
+
 interface User {
   id: number
   email: string
   nombre: string
-  role: 'ADMIN' | 'AUDITOR'
+  role: UserRole
 }
+
+// Roles con permisos de administración (incluye técnico, que tiene admin + logs)
+export const ADMIN_ROLES: UserRole[] = ['ADMIN', 'TECNICO']
+export const isAdminRole = (role?: UserRole) => !!role && ADMIN_ROLES.includes(role)
+export const canSeeLogs = (role?: UserRole) => role === 'TECNICO' || role === 'ADMIN'
 
 interface AuthState {
   user: User | null

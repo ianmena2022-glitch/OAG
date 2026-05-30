@@ -1,7 +1,7 @@
 ﻿import React from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { LayoutDashboard, Settings, LogOut, Users, BookOpen } from 'lucide-react'
-import { useAuthStore } from '../../store'
+import { useAuthStore, isAdminRole } from '../../store'
 import { cn } from '../../lib/utils'
 
 export default function Sidebar() {
@@ -47,7 +47,7 @@ export default function Sidebar() {
               isActive
                 ? 'bg-white/15 text-white font-medium'
                 : 'text-blue-200 hover:bg-white/10 hover:text-white',
-              user?.role !== 'ADMIN' && 'hidden'
+              !isAdminRole(user?.role) && 'hidden'
             )
           }
         >
@@ -62,7 +62,9 @@ export default function Sidebar() {
           <div className="text-white text-xs font-medium truncate">{user?.nombre}</div>
           <div className="text-blue-300 text-xs truncate">{user?.email}</div>
           <span className="inline-block mt-1 text-xs bg-white/10 text-blue-200 px-2 py-0.5 rounded">
-            {user?.role === 'ADMIN' ? 'Administrador' : 'Auditor'}
+            {user?.role === 'ADMIN' ? 'Administrador'
+              : user?.role === 'TECNICO' ? 'Técnico'
+              : 'Auditor'}
           </span>
         </div>
         <button
