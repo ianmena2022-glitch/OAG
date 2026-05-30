@@ -5,35 +5,23 @@ import json
 from typing import List, Dict
 from .claude_client import chat
 
-SYSTEM_JUSTIFICADOR = """Eres un auditor comercial experto en productos agroquímicos y en procesos de
-reportes de ventas de distribuidores agropecuarios argentinos.
+SYSTEM_JUSTIFICADOR = """Sos auditor de ventas de distribuidores agroquímicos argentinos.
 
-Tu tarea es analizar diferencias entre lo que el distribuidor reportó en el CRM de Syngenta
-versus lo que surge de su bajada de gestión (facturas reales), y generar justificaciones
-concisas y profesionales para cada diferencia.
+Recibís diferencias entre lo facturado por el distribuidor (gestión) y lo
+reportado al CRM de Syngenta. Asigná UNA categoría a cada una.
 
-Categorías de justificaciones posibles:
-1. "Diferencia de timing" - el comprobante fue emitido pero reportado en período distinto
-2. "Nota de crédito asociada" - existe una NC que reduce parcialmente el monto
-3. "Error de carga CRM" - diferencia probablemente por error en carga manual al CRM
-4. "Conversión de moneda" - diferencia atribuible a tipo de cambio utilizado
-5. "Producto no reportado en CRM" - venta real sin reporte en CRM
-6. "Cantidad parcial reportada" - solo parte de la cantidad fue reportada
-7. "Comprobante anulado" - comprobante en gestión pero anulado posteriormente
-8. "Sin diferencia significativa" - diferencia < 5% o < USD 100 (insignificante)
-9. "Requiere documentación de respaldo" - diferencia significativa sin justificación clara
+Categorías:
+- "Diferencia de timing" — distinto período de reporte
+- "Nota de crédito asociada" — NC reduce el monto
+- "Error de carga CRM" — error humano en carga manual
+- "Conversión de moneda" — diferencia por TC distinto
+- "Cantidad parcial reportada" — solo parte fue reportada
+- "Comprobante anulado" — anulado después
+- "Sin diferencia significativa" — < 5% o < USD 100
+- "Requiere respaldo" — sin justificación clara
 
-Para cada diferencia analiza el monto, la cantidad, el producto y el contexto para
-asignar la categoría más apropiada.
-
-Responde ÚNICAMENTE con un JSON array:
-[
-  {
-    "indice": número de fila,
-    "justificacion": "categoría: explicación breve en español (máx 150 chars)"
-  },
-  ...
-]
+Respondé ÚNICAMENTE un JSON array (sin nada más, sin ```):
+[{"indice": N, "justificacion": "categoría: explicación breve (máx 100 chars)"}, ...]
 """
 
 
@@ -58,7 +46,13 @@ def generar_justificaciones(diferencias: List[Dict]) -> List[Dict]:
 {json.dumps(indexed, ensure_ascii=False, default=str)}"""
 
         try:
-            response = chat(SYSTEM_JUSTIFICADOR, user_msg, max_tokens=4096)
+            # Sonnet 4.5 alcanza para esta clasificación categórica y es 5x más
+            # barato que Opus 4.5. max_tokens=1500 es suficiente para 30 items
+            # con descripciones cortas.
+            response = chat(
+                SYSTEM_JUSTIFICADOR, user_msg,
+                max_tokens=1500, model="claude-sonnet-4-5",
+            )
             text = response.strip()
             if "```json" in text:
                 text = text.split("```json")[1].split("```")[0].strip()

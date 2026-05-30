@@ -444,25 +444,45 @@ def ejecutar_paso3(
     # Cruce
     conciliacion = _cruzar_crm(df_gestion, df_crm)
 
-    # Generar justificaciones con IA para diferencias.
-    # Si la IA falla (caída, timeout, etc.) NO debe bloquear el Paso 3:
-    # quedan marcadas como "Pendiente de análisis" y el contador puede editarlas.
-    diferencias_para_ia = [
+    # Generar justificaciones con IA SOLO para las verdaderas DIFERENCIAS
+    # (matchearon en ambos lados pero los montos no cuadran). Las SOLO_GESTION
+    # y SOLO_CRM ya tienen una justificación template ("Venta sin reporte en
+    # CRM" / "Reportado en CRM sin factura") — la IA no aporta nada ahí y son
+    # la MAYORÍA de las filas (lo que disparaba los $13 de tokens).
+    #
+    # Además se ordenan por monto descendente y se capean a 200 — más que eso
+    # no aporta valor y empieza a costar caro / tardar minutos. Las que sobran
+    # quedan como pendientes para análisis manual.
+    MAX_IA = 200
+    diferencias_reales = [
         r for r in conciliacion
-        if r.get("diferencia_monto") and abs(r["diferencia_monto"]) > 0.01
+        if r.get("estado") == "DIFERENCIA"
+        and abs(r.get("diferencia_monto") or 0) > 0.01
     ]
-    if diferencias_para_ia:
+    diferencias_reales.sort(key=lambda r: abs(r.get("diferencia_monto") or 0), reverse=True)
+    overflow = []
+    if len(diferencias_reales) > MAX_IA:
+        overflow = diferencias_reales[MAX_IA:]
+        diferencias_reales = diferencias_reales[:MAX_IA]
+        for r in overflow:
+            r["justificacion"] = (
+                f"Pendiente — más de {MAX_IA} diferencias para analizar con IA. "
+                f"Revisar manualmente."
+            )
+
+    if diferencias_reales:
         try:
-            justificaciones = generar_justificaciones(diferencias_para_ia)
+            justificaciones = generar_justificaciones(diferencias_reales)
         except Exception as e:
             print(f"[PASO 3] generar_justificaciones falló: {e}")
             justificaciones = []
-        j_idx = 0
-        for r in conciliacion:
-            if r.get("diferencia_monto") and abs(r["diferencia_monto"]) > 0.01:
-                if j_idx < len(justificaciones):
-                    r["justificacion"] = justificaciones[j_idx]
-                    j_idx += 1
+        for r, j in zip(diferencias_reales, justificaciones):
+            if j:
+                r["justificacion"] = j
+
+    print(f"[PASO 3] IA: {len(diferencias_reales)} diferencias procesadas"
+          f"{' (+' + str(len(overflow)) + ' overflow)' if overflow else ''}, "
+          f"SOLO_* con template (sin IA)")
 
     resumen = {
         "total_lineas": len(conciliacion),

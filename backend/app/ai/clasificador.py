@@ -102,7 +102,9 @@ def _clasificar_agroquimicos(productos: List[str], batch_size: int = 50) -> List
             f"{json.dumps(batch, ensure_ascii=False)}"
         )
         try:
-            response = chat(SYSTEM_AGROQUIMICO, user_msg, max_tokens=4096)
+            # Clasificación SI/NO simple → Sonnet (5x más barato que Opus)
+            response = chat(SYSTEM_AGROQUIMICO, user_msg, max_tokens=2000,
+                            model="claude-sonnet-4-5")
             batch_results = _parse_json_array(response)
             resultados.extend(batch_results)
         except (json.JSONDecodeError, KeyError, Exception):
@@ -141,7 +143,9 @@ def _clasificar_syngenta(productos_agro: List[str], maestro_syngenta: List[str] 
             f"{json.dumps(batch, ensure_ascii=False)}"
         )
         try:
-            response = chat(SYSTEM_SYNGENTA, user_msg, max_tokens=4096)
+            # Clasificación SI/NO simple → Sonnet (5x más barato que Opus)
+            response = chat(SYSTEM_SYNGENTA, user_msg, max_tokens=2000,
+                            model="claude-sonnet-4-5")
             batch_results = _parse_json_array(response)
             for item in batch_results:
                 nombre = item.get("producto")

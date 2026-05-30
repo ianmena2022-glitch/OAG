@@ -16,11 +16,18 @@ def chat(
     user_message: str,
     max_tokens: int = 4096,
     temperature: float = 0.1,
+    model: str = None,
 ) -> str:
-    """Llamada simple sin thinking. Rápida, barata."""
+    """
+    Llamada simple sin thinking. Rápida, barata.
+
+    Para tareas tipo "clasificación categórica" o "extraer JSON" conviene pasar
+    model='claude-sonnet-4-5' explícito — es 5x más barato que Opus y suficiente
+    para el caso. Opus se reserva para análisis con razonamiento profundo.
+    """
     client = get_client()
     response = client.messages.create(
-        model=settings.CLAUDE_MODEL,
+        model=model or settings.CLAUDE_MODEL,
         max_tokens=max_tokens,
         temperature=temperature,
         system=system,
