@@ -84,14 +84,19 @@ def ejecutar_paso3(
     # Cruce
     conciliacion = _cruzar_crm(df_gestion, df_crm)
 
-    # Generar justificaciones con IA para diferencias
+    # Generar justificaciones con IA para diferencias.
+    # Si la IA falla (caída, timeout, etc.) NO debe bloquear el Paso 3:
+    # quedan marcadas como "Pendiente de análisis" y el contador puede editarlas.
     diferencias_para_ia = [
         r for r in conciliacion
         if r.get("diferencia_monto") and abs(r["diferencia_monto"]) > 0.01
     ]
     if diferencias_para_ia:
-        justificaciones = generar_justificaciones(diferencias_para_ia)
-        # Mapear justificaciones de vuelta
+        try:
+            justificaciones = generar_justificaciones(diferencias_para_ia)
+        except Exception as e:
+            print(f"[PASO 3] generar_justificaciones falló: {e}")
+            justificaciones = []
         j_idx = 0
         for r in conciliacion:
             if r.get("diferencia_monto") and abs(r["diferencia_monto"]) > 0.01:

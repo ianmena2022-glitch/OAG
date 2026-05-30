@@ -57,9 +57,8 @@ def generar_justificaciones(diferencias: List[Dict]) -> List[Dict]:
 
 {json.dumps(indexed, ensure_ascii=False, default=str)}"""
 
-        response = chat(SYSTEM_JUSTIFICADOR, user_msg, max_tokens=4096)
-
         try:
+            response = chat(SYSTEM_JUSTIFICADOR, user_msg, max_tokens=4096)
             text = response.strip()
             if "```json" in text:
                 text = text.split("```json")[1].split("```")[0].strip()
@@ -67,11 +66,14 @@ def generar_justificaciones(diferencias: List[Dict]) -> List[Dict]:
                 text = text.split("```")[1].split("```")[0].strip()
             batch_results = json.loads(text)
             resultados.extend(batch_results)
-        except (json.JSONDecodeError, KeyError):
+        except Exception as e:
+            # Cualquier falla de la IA (timeout, rate limit, JSON inválido, etc.)
+            # NO debe bloquear el Paso 3 — se marca como pendiente y listo.
+            print(f"[JUSTIFICADOR] Batch {i}-{i+len(batch)} falló: {e}")
             for j in range(len(batch)):
                 resultados.append({
                     "indice": i + j,
-                    "justificacion": "Error en generación automática — revisar manualmente",
+                    "justificacion": "Pendiente — generación automática no disponible",
                 })
 
     # Ordenar por índice y retornar solo justificaciones
