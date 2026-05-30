@@ -162,9 +162,11 @@ export default function Paso2({ expediente }: Props) {
               { label: 'Productos únicos', value: resultado.totales?.cant_productos },
               { label: 'Productos agroquímicos', value: resultado.totales?.cant_productos_agro },
             ].map((s, i) => (
-              <div key={i} className="card p-3">
-                <p className="text-xs text-oag-muted">{s.label}</p>
-                <p className="text-base font-bold text-oag-text mt-0.5">{s.value}</p>
+              <div key={i} className="card p-3 flex flex-col items-center text-center">
+                <p className="text-xs text-oag-muted leading-tight min-h-[2.4em] flex items-center justify-center">
+                  {s.label}
+                </p>
+                <p className="text-base font-bold text-oag-text mt-1">{s.value}</p>
               </div>
             ))}
           </div>

@@ -81,6 +81,24 @@ def _marcar_paso_completado(exp, paso, db):
     db.commit()
 
 
+def _safe_validar(db, exp_id: int, paso: int, build_validacion):
+    """
+    Corre la validación (IA + guardas) de forma defensiva. Si algo falla
+    (red, API, serialización, etc.) NO bloquea el avance del paso — devuelve
+    una validación vacía y deja un mensaje en logs.
+
+    Llamarse SIEMPRE después de _marcar_paso_completado para que el paso quede
+    marcado como hecho aunque la validación falle.
+    """
+    try:
+        validacion = build_validacion()
+        _save_resultado(db, exp_id, paso, "validacion", datos=validacion)
+        return validacion
+    except Exception as e:
+        print(f"[PASO {paso}] Validación falló — el paso queda igualmente completado. Error: {e}")
+        return {"ok": True, "severidad": "info", "alertas": []}
+
+
 # ── PASO 1 ────────────────────────────────────────────────────────────────────
 
 @router.post("/1/ejecutar")
@@ -120,10 +138,13 @@ def ejecutar_paso1(
     _save_resultado(db, exp_id, 1, "resumen", datos=resultado["resumen"])
     _save_resultado(db, exp_id, 1, "bajada_normalizada",
                     archivo_path=resultado["bajada_normalizada_path"])
-    _save_resultado(db, exp_id, 1, "validacion", datos=resultado.get("validacion"))
     _save_resultado(db, exp_id, 1, "parser_diagnostico",
                     datos={"items": resultado.get("parser_diagnostico", [])})
+    # Marcar completado ANTES de guardar la validación: si la validación falla
+    # (API caída, timeout, etc.) el paso queda igualmente cerrado y se puede
+    # avanzar al siguiente.
     _marcar_paso_completado(exp, 1, db)
+    _safe_validar(db, exp_id, 1, lambda: resultado.get("validacion"))
 
     return {
         "resumen": resultado["resumen"],
@@ -378,11 +399,12 @@ def ejecutar_paso2(
     _save_resultado(db, exp_id, 2, "syngenta", archivo_path=resultado["syngenta_path"])
     _save_resultado(db, exp_id, 2, "totales", datos=resultado["totales"])
 
-    # Validación: guardas determinísticas (siempre) + IA (si está disponible)
-    validacion_ia = validar_paso(2, resultado["totales"], muestra=resultado["ranking_clientes"][:5])
-    validacion = combinar_validacion(resultado.get("guardas", []), validacion_ia)
-    _save_resultado(db, exp_id, 2, "validacion", datos=validacion)
+    # Marcar completado primero — la validación que sigue es best-effort
     _marcar_paso_completado(exp, 2, db)
+    validacion = _safe_validar(db, exp_id, 2, lambda: combinar_validacion(
+        resultado.get("guardas", []),
+        validar_paso(2, resultado["totales"], muestra=resultado["ranking_clientes"][:5]),
+    ))
 
     return {
         "totales": resultado["totales"],
@@ -458,10 +480,11 @@ def ejecutar_paso3(
     _save_resultado(db, exp_id, 3, "parser_diagnostico",
                     datos={"items": resultado.get("parser_diagnostico", [])})
 
-    # Validación IA
-    validacion = validar_paso(3, resultado["resumen"], muestra=resultado["conciliacion"][:5])
-    _save_resultado(db, exp_id, 3, "validacion", datos=validacion)
+    # Marcar completado primero — la validación que sigue es best-effort
     _marcar_paso_completado(exp, 3, db)
+    validacion = _safe_validar(db, exp_id, 3, lambda: validar_paso(
+        3, resultado["resumen"], muestra=resultado["conciliacion"][:5],
+    ))
 
     return {**resultado, "validacion": validacion}
 
@@ -518,10 +541,11 @@ def ejecutar_paso4(
     _save_resultado(db, exp_id, 4, "parser_diagnostico",
                     datos={"items": resultado.get("parser_diagnostico", [])})
 
-    # Validación IA
-    validacion = validar_paso(4, resultado["totales"], muestra=resultado["resumen"][:5])
-    _save_resultado(db, exp_id, 4, "validacion", datos=validacion)
+    # Marcar completado primero — la validación que sigue es best-effort
     _marcar_paso_completado(exp, 4, db)
+    validacion = _safe_validar(db, exp_id, 4, lambda: validar_paso(
+        4, resultado["totales"], muestra=resultado["resumen"][:5],
+    ))
 
     return {
         "totales": resultado["totales"],
@@ -592,10 +616,9 @@ def ejecutar_paso5(
     _save_resultado(db, exp_id, 5, "informe", archivo_path=resultado["excel_path"])
     _save_resultado(db, exp_id, 5, "totales", datos=resultado["totales"])
 
-    # Validación IA
-    validacion = validar_paso(5, resultado["totales"])
-    _save_resultado(db, exp_id, 5, "validacion", datos=validacion)
+    # Marcar completado primero — la validación que sigue es best-effort
     _marcar_paso_completado(exp, 5, db)
+    validacion = _safe_validar(db, exp_id, 5, lambda: validar_paso(5, resultado["totales"]))
 
     return {**resultado, "validacion": validacion}
 
@@ -666,10 +689,9 @@ def ejecutar_paso6(
     _save_resultado(db, exp_id, 6, "informe", archivo_path=resultado["excel_path"])
     _save_resultado(db, exp_id, 6, "totales", datos=resultado["totales"])
 
-    # Validación IA
-    validacion = validar_paso(6, resultado["totales"])
-    _save_resultado(db, exp_id, 6, "validacion", datos=validacion)
+    # Marcar completado primero — la validación que sigue es best-effort
     _marcar_paso_completado(exp, 6, db)
+    validacion = _safe_validar(db, exp_id, 6, lambda: validar_paso(6, resultado["totales"]))
 
     return {**resultado, "validacion": validacion}
 
