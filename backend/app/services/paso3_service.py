@@ -434,12 +434,18 @@ def ejecutar_paso3(
     expediente_id: int,
     cuit_distribuidor: str = "",
     nombre_distribuidor: str = "",
+    anotaciones_manuales: list = None,
 ) -> dict:
     """
     Cruza agroquímicos Syngenta (Paso 2) vs CRM.
 
     El archivo CRM de Syngenta contiene reportes de TODOS los distribuidores;
     se filtra al distribuidor del expediente por CUIT antes de cruzar.
+
+    anotaciones_manuales: list de dicts con anotaciones manuales del Paso 1
+    (comprobantes ARCA que el auditor completó a mano porque la gestión
+    auto-detectada no los tenía). Se agregan al lado gestión del cruce para
+    que aparezcan como matches en lugar de SOLO_CRM erróneos.
     """
     # Cargar datos
     df_agro = pd.read_excel(path_agroquimicos_syngenta, dtype=str)
@@ -516,6 +522,24 @@ def ejecutar_paso3(
     # Preparar DataFrame de gestión (puede ser bajada_normalizada completa o
     # bajada_syngenta ya filtrada — _preparar_gestion tolera ambos esquemas).
     df_gestion = _preparar_gestion(df_agro)
+
+    # ── Anotaciones manuales del Paso 1 ─────────────────────────────────────
+    # Solo se agregan al cruce las que vienen COMPLETAS:
+    #   - monto_gestion_usd > 0 (sin monto no aportan al match)
+    #   - producto con texto (sino no podemos cruzar con CRM por producto)
+    # Las anotaciones a medio llenar (cliente sin monto, sin clasificación) se
+    # ignoran — meterlas al cruce solo agregaría ruido.
+    if anotaciones_manuales:
+        completas = [
+            a for a in anotaciones_manuales
+            if (a.get("monto_usd") or 0) != 0 and str(a.get("articulo") or "").strip()
+        ]
+        if completas:
+            df_an = _preparar_gestion(pd.DataFrame(completas))
+            df_gestion = pd.concat([df_gestion, df_an], ignore_index=True)
+            print(f"[PASO 3] +{len(df_an)} anotaciones manuales completas agregadas "
+                  f"(de {len(anotaciones_manuales)} totales)")
+
     df_crm = _preparar_crm(df_crm)
 
     # ── Filtrar gestión usando el CRM como GROUND TRUTH ──────────────────────

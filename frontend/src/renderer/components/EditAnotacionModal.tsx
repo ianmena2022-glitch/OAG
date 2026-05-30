@@ -73,6 +73,19 @@ export default function EditAnotacionModal({ expedienteId, row, onClose }: Props
     onError: () => push('error', 'Error al guardar la anotación'),
   })
 
+  // Validaciones — la anotación se considera completa si:
+  //  1. Se clasificó SÍ/NO si es agroquímico Syngenta
+  //  2. Si es SÍ: producto debe estar
+  //  3. Monto en USD (cualquier valor incluyendo 0 es válido — el auditor decide)
+  const faltaClasificacion = esAgro === null
+  const faltaProducto = esAgro === true && !producto.trim()
+  const motivoBloqueado = faltaClasificacion
+    ? 'Marcá si es agroquímico Syngenta para guardar'
+    : faltaProducto
+      ? 'Ingresá el nombre del producto Syngenta'
+      : ''
+  const puedeGuardar = !motivoBloqueado && !mutation.isPending
+
   // Cerrar con Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -219,18 +232,26 @@ export default function EditAnotacionModal({ expedienteId, row, onClose }: Props
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end gap-2 px-5 py-3 border-t border-oag-border bg-gray-50">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-oag-muted hover:text-oag-text transition-colors">
-            Cancelar
-          </button>
-          <button
-            onClick={() => mutation.mutate()}
-            disabled={mutation.isPending}
-            className="btn-primary flex items-center gap-2"
-          >
-            {mutation.isPending ? <Loader size={13} className="animate-spin" /> : <Save size={13} />}
-            Guardar
-          </button>
+        <div className="px-5 py-3 border-t border-oag-border bg-gray-50">
+          {motivoBloqueado && (
+            <p className="text-xs text-orange-700 mb-2 text-right">
+              ⚠ {motivoBloqueado}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-oag-muted hover:text-oag-text transition-colors">
+              Cancelar
+            </button>
+            <button
+              onClick={() => mutation.mutate()}
+              disabled={!puedeGuardar}
+              className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              title={motivoBloqueado || 'Guardar anotación'}
+            >
+              {mutation.isPending ? <Loader size={13} className="animate-spin" /> : <Save size={13} />}
+              Guardar
+            </button>
+          </div>
         </div>
       </div>
     </div>

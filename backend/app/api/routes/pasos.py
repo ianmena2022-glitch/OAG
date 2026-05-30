@@ -477,6 +477,38 @@ def ejecutar_paso3(
     # CRM
     path_crm = _get_archivo_path(exp_id, TipoArchivo.CRM, db)
 
+    # ── Anotaciones manuales del Paso 1 (solo las COMPLETAS) ────────────────
+    # El auditor puede completar a mano comprobantes ARCA que la gestión no
+    # detectó (status MANUAL en Paso 1). Para que cuenten en el cruce con CRM
+    # tienen que estar bien clasificadas: agroquímico SÍ + producto + monto.
+    # Las incompletas (cliente sin monto, sin clasificación) se ignoran para
+    # no contaminar el cruce.
+    anots_raw = db.query(AnotacionConciliacion).filter(
+        AnotacionConciliacion.expediente_id == exp_id,
+        AnotacionConciliacion.paso == 1,
+        AnotacionConciliacion.es_agroquimico == True,
+    ).all()
+    anotaciones_manuales = []
+    for a in anots_raw:
+        if not a.producto or a.monto_gestion_usd is None or a.monto_gestion_usd == 0:
+            continue
+        # comprobante_key format: "FC-00001-00000034"
+        parts = (a.comprobante_key or "").split("-", 2)
+        tipo = parts[0] if len(parts) > 0 else (a.tipo or "FC")
+        numero = "-".join(parts[1:]) if len(parts) > 1 else (a.numero or "")
+        anotaciones_manuales.append({
+            "tipo_comprobante": tipo,
+            "tipo": tipo,
+            "numero_comprobante": numero,
+            "numero": numero,
+            "fecha": a.fecha or "",
+            "cliente": a.cliente or "",
+            "cuit_cliente": "",
+            "articulo": a.producto,
+            "cantidad": a.cantidad or 0,
+            "monto_usd": a.monto_gestion_usd,
+        })
+
     # Capturamos TODO con traceback completo para que el toast del frontend muestre
     # el detalle real en vez de "Internal Server Error" genérico.
     import traceback
@@ -485,6 +517,7 @@ def ejecutar_paso3(
             path_paso2, path_crm, exp_id,
             cuit_distribuidor=exp.cuit_distribuidor,
             nombre_distribuidor=exp.nombre_distribuidor,
+            anotaciones_manuales=anotaciones_manuales,
         )
         _save_resultado(db, exp_id, 3, "conciliacion", datos=resultado["conciliacion"])
         _save_resultado(db, exp_id, 3, "resumen", datos=resultado["resumen"])

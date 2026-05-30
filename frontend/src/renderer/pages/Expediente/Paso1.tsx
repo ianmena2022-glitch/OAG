@@ -124,12 +124,30 @@ export default function Paso1({ expediente }: Props) {
       ) : '—'
     },
     {
-      key: 'estado', label: 'Estado', width: '110px', align: 'center',
-      render: (v) => (
-        <span className={cn('text-xs px-2 py-0.5 rounded font-medium', ESTADO_COLORS[v] || '')}>
-          {v}
-        </span>
-      ),
+      key: 'estado', label: 'Estado', width: '130px', align: 'center',
+      render: (v, row: any) => {
+        // Para MANUAL: marcar si está incompleta (sin clasificación agroquímico/Syngenta)
+        // — no aporta al Paso 3 hasta que se complete.
+        const incompleta =
+          v === 'MANUAL' &&
+          (row?.anotacion?.es_agroquimico == null ||
+            (row?.anotacion?.es_agroquimico === true && !row?.anotacion?.producto))
+        return (
+          <div className="flex flex-col items-center gap-0.5">
+            <span className={cn('text-xs px-2 py-0.5 rounded font-medium', ESTADO_COLORS[v] || '')}>
+              {v}
+            </span>
+            {incompleta && (
+              <span
+                className="text-[10px] text-orange-700 font-medium"
+                title="Falta clasificar como agroquímico Syngenta. No se incluye en Paso 3."
+              >
+                ⚠ sin clasificar
+              </span>
+            )}
+          </div>
+        )
+      },
     },
     {
       key: '_edit', label: '', width: '40px', align: 'center',
