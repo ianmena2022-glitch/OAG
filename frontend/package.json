@@ -55,7 +55,8 @@
     "publish": {
       "provider": "github",
       "owner": "ianmena2022-glitch",
-      "repo": "OAG"
+      "repo": "OAG",
+      "releaseType": "release"
     },
     "win": {
       "target": "nsis",
