@@ -10,6 +10,40 @@ from .api.routes import auth, expedientes, admin, pasos, logs
 # Crear tablas
 Base.metadata.create_all(bind=engine)
 
+
+def _ensure_enum_values():
+    """
+    SQLAlchemy create_all NO altera tipos enum existentes en Postgres.
+    Cuando agregamos un valor nuevo a un Enum de Python (ej: TECNICO en
+    UserRole), tenemos que ejecutar ALTER TYPE ... ADD VALUE manualmente.
+    Esta función se asegura de que todos los valores del enum Python existan
+    en el enum de Postgres. En SQLite (dev local) es no-op.
+    """
+    from sqlalchemy import text
+    if not engine.url.drivername.startswith("postgres"):
+        return
+    # Map: enum name in DB -> valores del Python enum
+    enums = {
+        "userrole": ["ADMIN", "AUDITOR", "TECNICO"],
+        "estadoexpediente": ["BORRADOR", "EN_PROCESO", "COMPLETADO"],
+    }
+    for enum_name, values in enums.items():
+        for val in values:
+            try:
+                # ADD VALUE IF NOT EXISTS está disponible en Postgres 9.6+
+                # y se puede ejecutar dentro de transacción desde PG 12.
+                with engine.connect() as conn:
+                    conn.execute(text(
+                        f"ALTER TYPE {enum_name} ADD VALUE IF NOT EXISTS '{val}'"
+                    ))
+                    conn.commit()
+            except Exception as e:
+                # No bloquear el arranque si una migración falla — solo loggear.
+                print(f"[migration] No se pudo agregar '{val}' al enum {enum_name}: {e}")
+
+
+_ensure_enum_values()
+
 # Crear directorio de uploads
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 
