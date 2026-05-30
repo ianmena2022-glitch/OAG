@@ -70,6 +70,9 @@ def ejecutar_paso2(
     # Guardar archivos intermedios
     path_agro = os.path.join(upload_dir, "bajada_agroquimicos.xlsx")
     df_agro.to_excel(path_agro, index=False)
+    # Subset Syngenta (lo que realmente usa el Paso 3 para cruzar con el CRM)
+    path_syngenta = os.path.join(upload_dir, "bajada_syngenta.xlsx")
+    df_syngenta.to_excel(path_syngenta, index=False)
 
     totales = {
         "total_facturado_usd": round(df["monto_usd"].sum(), 2),
@@ -88,6 +91,7 @@ def ejecutar_paso2(
         "clasificacion": reporte_clasificacion,
         "tabla_apertura": tabla_apertura,
         "agroquimicos_path": path_agro,
+        "syngenta_path": path_syngenta,
         "totales": totales,
         # Guardas determinísticas (no dependen de IA) para mostrar como alertas
         "guardas": _guardas_paso2(df, totales),

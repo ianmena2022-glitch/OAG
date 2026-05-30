@@ -375,6 +375,7 @@ def ejecutar_paso2(
     _save_resultado(db, exp_id, 2, "clasificacion", datos=resultado["clasificacion"])
     _save_resultado(db, exp_id, 2, "tabla_apertura", datos=resultado["tabla_apertura"])
     _save_resultado(db, exp_id, 2, "agroquimicos", archivo_path=resultado["agroquimicos_path"])
+    _save_resultado(db, exp_id, 2, "syngenta", archivo_path=resultado["syngenta_path"])
     _save_resultado(db, exp_id, 2, "totales", datos=resultado["totales"])
 
     # Validación: guardas determinísticas (siempre) + IA (si está disponible)
@@ -422,21 +423,32 @@ def ejecutar_paso3(
     if 2 not in (exp.pasos_completados or []):
         raise HTTPException(400, "Completar Paso 2 antes de ejecutar Paso 3")
 
-    # Agroquímicos Syngenta del Paso 2
-    agro_res = db.query(ResultadoPaso).filter(
+    # Productos Syngenta del Paso 2 (lo correcto para cruzar con CRM Syngenta).
+    # Fallback al archivo "agroquimicos" para expedientes que ya corrieron Paso 2
+    # antes de que existiera el subset Syngenta — en ese caso conviene re-ejecutar
+    # el Paso 2 para obtener el cruce limpio.
+    syng_res = db.query(ResultadoPaso).filter(
         ResultadoPaso.expediente_id == exp_id,
         ResultadoPaso.paso == 2,
-        ResultadoPaso.subtipo == "agroquimicos",
+        ResultadoPaso.subtipo == "syngenta",
     ).first()
-    if not agro_res or not agro_res.archivo_path:
-        raise HTTPException(400, "Archivo de agroquímicos no disponible")
+    path_paso2 = syng_res.archivo_path if syng_res and syng_res.archivo_path else None
+    if not path_paso2:
+        agro_res = db.query(ResultadoPaso).filter(
+            ResultadoPaso.expediente_id == exp_id,
+            ResultadoPaso.paso == 2,
+            ResultadoPaso.subtipo == "agroquimicos",
+        ).first()
+        if not agro_res or not agro_res.archivo_path:
+            raise HTTPException(400, "Archivo de productos Syngenta no disponible — re-ejecutá el Paso 2")
+        path_paso2 = agro_res.archivo_path
 
     # CRM
     path_crm = _get_archivo_path(exp_id, TipoArchivo.CRM, db)
 
     try:
         resultado = paso3_service.ejecutar_paso3(
-            agro_res.archivo_path, path_crm, exp_id
+            path_paso2, path_crm, exp_id
         )
     except Exception as e:
         raise HTTPException(500, f"Error en Paso 3: {str(e)}")
