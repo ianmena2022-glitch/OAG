@@ -47,22 +47,44 @@ def ejecutar_paso2(
     clasificaciones = clasificar_productos(productos_unicos, maestro_syngenta)
     clasificacion_map = {c["producto"]: c for c in clasificaciones}
 
-    # 5. Reporte de clasificación
-    reporte_clasificacion = [
-        {
-            "articulo": c["producto"],
-            "agroquimico": c["agroquimico"],
-            "syngenta": c["syngenta"],
-            "justificacion": c.get("justificacion", ""),
-        }
-        for c in clasificaciones
-    ]
-
     # 6. Filtros
+    #
+    # AGROQUÍMICOS — usa la clasificación de la IA (es la mejor info que
+    # tenemos sobre si un producto cualquiera es agro o no). Si la IA falla
+    # y el producto es Syngenta (por marca), lo marcamos agro=SI igual.
+    #
+    # SYNGENTA — usa el MAESTRO Syngenta como ground truth, no la clasificación
+    # IA. Razones:
+    #   (a) El maestro es admin-curado y deterministico — la IA tiene falsos
+    #       positivos y negativos.
+    #   (b) Paso 3 usa el mismo criterio (extrae marcas del CRM Syngenta) →
+    #       así los totales de Paso 2 y Paso 3 coinciden.
+    # Si el maestro está vacío caemos a la clasificación IA como fallback.
+    productos_syngenta = _productos_syngenta_por_marca(
+        productos_unicos, maestro_syngenta, clasificaciones
+    )
     productos_agro = {c["producto"] for c in clasificaciones if c["agroquimico"] == "SI"}
-    productos_syngenta = {c["producto"] for c in clasificaciones if c.get("syngenta") == "SI"}
+    # Cualquier Syngenta es agroquímico por definición — override por si la
+    # IA fallo o lo clasifico mal.
+    productos_agro |= productos_syngenta
+
     df_agro = df[df["articulo"].isin(productos_agro)].copy()
     df_syngenta = df[df["articulo"].isin(productos_syngenta)].copy()
+
+    # 5. Reporte de clasificación — la columna Syngenta refleja la decisión
+    # determinística (match por marca del maestro), no la opinión de la IA.
+    # La justificación textual sigue siendo la de la IA (informativa).
+    reporte_clasificacion = []
+    for c in clasificaciones:
+        prod = c["producto"]
+        es_syn = prod in productos_syngenta
+        es_agro = prod in productos_agro
+        reporte_clasificacion.append({
+            "articulo": prod,
+            "agroquimico": "SI" if es_agro else ("NO" if c["agroquimico"] in ("SI", "NO") else c["agroquimico"]),
+            "syngenta": "SI" if es_syn else "NO",
+            "justificacion": c.get("justificacion", ""),
+        })
 
     # 7. Tabla de apertura
     tabla_apertura = _tabla_apertura(df_agro, clasificacion_map, anio_analisis)
@@ -96,6 +118,50 @@ def ejecutar_paso2(
         # Guardas determinísticas (no dependen de IA) para mostrar como alertas
         "guardas": _guardas_paso2(df, totales),
     }
+
+
+def _productos_syngenta_por_marca(productos_unicos: list, maestro: list,
+                                  clasificaciones_ia: list) -> set:
+    """
+    Decide qué productos de la gestión son Syngenta usando el MAESTRO Syngenta
+    como ground truth (substring match de marca, mismo criterio que Paso 3
+    contra el CRM). La IA queda solo como fallback cuando no hay maestro.
+
+    Estrategia:
+      - Extraer las marcas únicas del maestro (primera palabra significativa
+        + el nombre completo).
+      - Marcar producto como Syngenta si su nombre contiene alguna marca del
+        maestro.
+      - Si el maestro está vacío → fallback a la clasificación IA.
+    """
+    if not maestro:
+        return {c["producto"] for c in clasificaciones_ia if c.get("syngenta") == "SI"}
+
+    marcas = set()
+    for nombre in maestro:
+        if not nombre:
+            continue
+        s = str(nombre).strip().upper()
+        if not s:
+            continue
+        marcas.add(s)
+        primera = s.split()[0]
+        if len(primera) > 2 and primera.isalpha():
+            marcas.add(primera)
+    GENERICAS = {"PRODUCTO", "ARTICULO", "ITEM", "DESC", "VARIOS", "OTROS"}
+    marcas -= GENERICAS
+
+    if not marcas:
+        return {c["producto"] for c in clasificaciones_ia if c.get("syngenta") == "SI"}
+
+    resultado = set()
+    for prod in productos_unicos:
+        if not prod:
+            continue
+        p_upper = str(prod).upper()
+        if any(m in p_upper for m in marcas):
+            resultado.add(prod)
+    return resultado
 
 
 def _guardas_paso2(df: pd.DataFrame, totales: dict) -> list:
