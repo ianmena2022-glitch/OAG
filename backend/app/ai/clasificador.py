@@ -13,6 +13,23 @@ y se conserva la justificación de la Etapa 1.
 import json
 from typing import List, Dict
 from .claude_client import chat
+from ..core.config import settings
+
+
+def _chat_cheap(system: str, user_msg: str, max_tokens: int = 2000) -> str:
+    """
+    Llama al modelo barato. Si falla (nombre invalido, no disponible, etc.)
+    cae automaticamente al modelo principal (mas caro pero seguro) y deja
+    el error visible en los logs.
+    """
+    try:
+        return chat(system, user_msg, max_tokens=max_tokens,
+                    model=settings.CLAUDE_MODEL_CHEAP)
+    except Exception as e:
+        print(f"[CLASIFICADOR] Modelo cheap '{settings.CLAUDE_MODEL_CHEAP}' fallo "
+              f"({type(e).__name__}: {e}). Cayendo a '{settings.CLAUDE_MODEL}'.")
+        return chat(system, user_msg, max_tokens=max_tokens,
+                    model=settings.CLAUDE_MODEL)
 
 
 # ─── Etapa 1: ¿es agroquímico? ─────────────────────────────────────────────────
@@ -102,17 +119,18 @@ def _clasificar_agroquimicos(productos: List[str], batch_size: int = 50) -> List
             f"{json.dumps(batch, ensure_ascii=False)}"
         )
         try:
-            # Clasificación SI/NO simple → Sonnet (5x más barato que Opus)
-            response = chat(SYSTEM_AGROQUIMICO, user_msg, max_tokens=2000,
-                            model="claude-sonnet-4-5")
+            response = _chat_cheap(SYSTEM_AGROQUIMICO, user_msg)
             batch_results = _parse_json_array(response)
             resultados.extend(batch_results)
-        except (json.JSONDecodeError, KeyError, Exception):
+        except Exception as e:
+            print(f"[CLASIFICADOR] Etapa1 batch {i}-{i+len(batch)} fallo "
+                  f"({type(e).__name__}: {e}). Productos quedan en REVISAR.")
             for p in batch:
                 resultados.append({
                     "producto": p,
                     "agroquimico": "REVISAR",
-                    "justificacion": "Error en clasificación automática — revisar manualmente",
+                    "justificacion": f"Error en clasificación automática — {type(e).__name__}: "
+                                     f"{str(e)[:100]}",
                 })
     return resultados
 
@@ -143,9 +161,7 @@ def _clasificar_syngenta(productos_agro: List[str], maestro_syngenta: List[str] 
             f"{json.dumps(batch, ensure_ascii=False)}"
         )
         try:
-            # Clasificación SI/NO simple → Sonnet (5x más barato que Opus)
-            response = chat(SYSTEM_SYNGENTA, user_msg, max_tokens=2000,
-                            model="claude-sonnet-4-5")
+            response = _chat_cheap(SYSTEM_SYNGENTA, user_msg)
             batch_results = _parse_json_array(response)
             for item in batch_results:
                 nombre = item.get("producto")
@@ -154,11 +170,14 @@ def _clasificar_syngenta(productos_agro: List[str], maestro_syngenta: List[str] 
                         "syngenta": item.get("syngenta", "REVISAR"),
                         "justificacion": item.get("justificacion", ""),
                     }
-        except (json.JSONDecodeError, KeyError, Exception):
+        except Exception as e:
+            print(f"[CLASIFICADOR] Etapa2 (Syngenta) batch {i}-{i+len(batch)} fallo "
+                  f"({type(e).__name__}: {e}). Productos quedan en REVISAR.")
             for p in batch:
                 mapa[p] = {
                     "syngenta": "REVISAR",
-                    "justificacion": "Error en clasificación Syngenta — revisar manualmente",
+                    "justificacion": f"Error en clasificación Syngenta — {type(e).__name__}: "
+                                     f"{str(e)[:100]}",
                 }
     return mapa
 

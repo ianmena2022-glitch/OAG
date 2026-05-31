@@ -4,6 +4,7 @@ Genera justificaciones automáticas para diferencias en el cruce CRM.
 import json
 from typing import List, Dict
 from .claude_client import chat
+from ..core.config import settings
 
 SYSTEM_JUSTIFICADOR = """Sos auditor de ventas de distribuidores agroquímicos argentinos.
 
@@ -46,13 +47,18 @@ def generar_justificaciones(diferencias: List[Dict]) -> List[Dict]:
 {json.dumps(indexed, ensure_ascii=False, default=str)}"""
 
         try:
-            # Sonnet 4.5 alcanza para esta clasificación categórica y es 5x más
-            # barato que Opus 4.5. max_tokens=1500 es suficiente para 30 items
-            # con descripciones cortas.
-            response = chat(
-                SYSTEM_JUSTIFICADOR, user_msg,
-                max_tokens=1500, model="claude-sonnet-4-5",
-            )
+            # Sonnet alcanza para esta clasificación categórica (5x más barato).
+            # Si el modelo cheap falla, fallback automático al modelo principal
+            # — la visibilidad del error queda en stdout y los logs.
+            try:
+                response = chat(SYSTEM_JUSTIFICADOR, user_msg,
+                                max_tokens=1500, model=settings.CLAUDE_MODEL_CHEAP)
+            except Exception as e_cheap:
+                print(f"[JUSTIFICADOR] Modelo cheap '{settings.CLAUDE_MODEL_CHEAP}' "
+                      f"fallo ({type(e_cheap).__name__}: {e_cheap}). "
+                      f"Cayendo a '{settings.CLAUDE_MODEL}'.")
+                response = chat(SYSTEM_JUSTIFICADOR, user_msg,
+                                max_tokens=1500, model=settings.CLAUDE_MODEL)
             text = response.strip()
             if "```json" in text:
                 text = text.split("```json")[1].split("```")[0].strip()

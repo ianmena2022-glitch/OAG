@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     # Anthropic
     ANTHROPIC_API_KEY: str = ""
     CLAUDE_MODEL: str = "claude-opus-4-5"
+    # Modelo barato para tareas de clasificación simple (agroquímico SI/NO,
+    # justificaciones categóricas). Si la llamada con este modelo falla
+    # (ej: nombre inválido o no disponible), automáticamente cae al CLAUDE_MODEL.
+    CLAUDE_MODEL_CHEAP: str = "claude-sonnet-4-5"
 
     # Files — usar /data en producción (Railway Volume) o /tmp en local
     UPLOAD_DIR: str = "/data/ogsa_uploads"
