@@ -16,7 +16,7 @@ from .claude_client import chat
 from ..core.config import settings
 
 
-def _chat_cheap(system: str, user_msg: str, max_tokens: int = 2000) -> str:
+def _chat_cheap(system: str, user_msg: str, max_tokens: int = 8192) -> str:
     """
     Llama al modelo barato. Si falla (nombre invalido, no disponible, etc.)
     cae automaticamente al modelo principal (mas caro pero seguro) y deja

@@ -50,15 +50,17 @@ def generar_justificaciones(diferencias: List[Dict]) -> List[Dict]:
             # Sonnet alcanza para esta clasificación categórica (5x más barato).
             # Si el modelo cheap falla, fallback automático al modelo principal
             # — la visibilidad del error queda en stdout y los logs.
+            # max_tokens=8192 con sobra para 30 items × ~150 tokens cada uno.
+            # Subido desde 1500 que truncaba la respuesta a mitad del JSON.
             try:
                 response = chat(SYSTEM_JUSTIFICADOR, user_msg,
-                                max_tokens=1500, model=settings.CLAUDE_MODEL_CHEAP)
+                                max_tokens=8192, model=settings.CLAUDE_MODEL_CHEAP)
             except Exception as e_cheap:
                 print(f"[JUSTIFICADOR] Modelo cheap '{settings.CLAUDE_MODEL_CHEAP}' "
                       f"fallo ({type(e_cheap).__name__}: {e_cheap}). "
                       f"Cayendo a '{settings.CLAUDE_MODEL}'.")
                 response = chat(SYSTEM_JUSTIFICADOR, user_msg,
-                                max_tokens=1500, model=settings.CLAUDE_MODEL)
+                                max_tokens=8192, model=settings.CLAUDE_MODEL)
             text = response.strip()
             if "```json" in text:
                 text = text.split("```json")[1].split("```")[0].strip()
