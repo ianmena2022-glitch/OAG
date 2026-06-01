@@ -927,5 +927,24 @@ def _cruzar_crm(df_gestion: pd.DataFrame, df_crm: pd.DataFrame) -> List[Dict]:
                 "estado": "SOLO_CRM",
             })
 
+    # Limpiar ruido: NC/ND del distribuidor que (a) no tienen detalle de
+    # producto y (b) no matchearon con nada en CRM. Sin detalle no podemos
+    # confirmar si eran Syngenta, y como tampoco aparecen en el CRM Syngenta,
+    # casi seguro son NC/ND para productos NO Syngenta. Mostrarlas solo
+    # generaría ruido en la conciliación (cientos de filas sin valor para el
+    # auditor humano, que las descarta manualmente).
+    #
+    # Se conservan las NC/ND SOLO_GESTION que SÍ tienen producto identificado
+    # — esas son los hallazgos reales (NC para producto Syngenta que el
+    # distribuidor no le reportó a Syngenta).
+    conciliacion = [
+        r for r in conciliacion
+        if not (
+            r["estado"] == "SOLO_GESTION"
+            and str(r.get("tipo_comprobante", "")).upper() in ("NC", "ND")
+            and not str(r.get("producto") or "").strip()
+        )
+    ]
+
     conciliacion.sort(key=lambda x: x.get("fecha", ""))
     return conciliacion
