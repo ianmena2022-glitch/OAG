@@ -664,10 +664,12 @@ def _preparar_gestion(df: pd.DataFrame) -> pd.DataFrame:
 
     df["numero_comprobante"] = _col_or_default(
         "numero_comprobante", "numero", default=""
-    ).astype(str).str.strip()
+    ).fillna("").astype(str).str.strip()
     # cuit normalizado a dígitos puros para que matchee con el cuit del CRM
-    df["cuit_cliente"] = _col_or_default("cuit_cliente", default="").astype(str).apply(_solo_digitos)
-    df["articulo"] = _col_or_default("articulo", default="").astype(str).str.strip().str.upper()
+    df["cuit_cliente"] = _col_or_default("cuit_cliente", default="").fillna("").astype(str).apply(_solo_digitos)
+    # IMPORTANTE: fillna("") ANTES de astype(str). Sino NaN → "nan" → "NAN"
+    # tras upper(), y aparece "NAN" como producto en filas NC/ND sin detalle.
+    df["articulo"] = _col_or_default("articulo", default="").fillna("").astype(str).str.strip().str.upper()
 
     # cantidad puede no existir si la bajada se generó con la versión vieja
     # de Paso 1 (que no la capturaba) — default 0.
@@ -753,7 +755,13 @@ def _cruzar_crm(df_gestion: pd.DataFrame, df_crm: pd.DataFrame) -> List[Dict]:
         return ""
 
     def _productos_concat(serie, max_len=300):
-        unicos = sorted({str(v).strip() for v in serie if str(v or "").strip()})
+        # Filtrar valores vacíos, NaN literal "nan"/"NAN" y "NONE" — son ruido
+        # que aparecía como producto en filas NC/ND sin detalle.
+        BASURA = {"", "NAN", "NONE", "NULL"}
+        unicos = sorted({
+            str(v).strip() for v in serie
+            if str(v or "").strip() and str(v).strip().upper() not in BASURA
+        })
         s = ", ".join(unicos)
         return s if len(s) <= max_len else s[:max_len - 1] + "…"
 
