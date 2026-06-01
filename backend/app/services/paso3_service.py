@@ -702,9 +702,18 @@ def _preparar_crm(df: pd.DataFrame) -> pd.DataFrame:
     df["cliente_crm"] = _serie("cliente_crm", default="").astype(str).str.strip()
     df["cantidad_crm"] = pd.to_numeric(_serie("cantidad_crm", default=0), errors="coerce").fillna(0)
     df["monto_crm"] = pd.to_numeric(_serie("monto_crm", default=0), errors="coerce").fillna(0)
-    # tipo_crm: el CRM Syngenta usa "FC"/"RM"/"NC" en "Tipo de documento".
-    # RM (= "Remito"/"Recibo de Mercadería") se trata como FC para signo.
+    # tipo_crm: el CRM Syngenta usa "FC"/"NC"/"RM" en "Tipo de documento".
     df["tipo_crm"] = _serie("tipo_crm", default="").astype(str).apply(normalizar_tipo_comprobante)
+
+    # Excluir REMITOS — son entregas de mercadería de Syngenta al distribuidor,
+    # NO facturas que él emite. El distribuidor nunca va a tener estos números
+    # en su sistema de facturación → matchearlos genera 100+ SOLO_CRM falsos.
+    n_total = len(df)
+    df = df[df["tipo_crm"].isin(["FC", "NC", "ND"])].copy()
+    descartados = n_total - len(df)
+    if descartados:
+        print(f"[CRM] Excluidos {descartados} comprobantes que no son facturas "
+              f"(remitos / movimientos internos)")
     return df
 
 
@@ -737,15 +746,19 @@ def _cruzar_crm(df_gestion: pd.DataFrame, df_crm: pd.DataFrame) -> List[Dict]:
 
     def _tipo_norm(t):
         """Normaliza el tipo a FC/NC/ND para que matche entre gestión y CRM.
-        RM (remito) del CRM se trata como FC. Importante usar el tipo en la
-        clave de match para no confundir FC nro X con NC nro X (mismo número
-        fiscal, comprobantes distintos)."""
+        Importante usar el tipo en la clave de match para no confundir FC nro
+        X con NC nro X (mismo número fiscal, comprobantes distintos).
+        Los RM (remitos) deben venir ya filtrados de _preparar_crm porque no
+        son facturas — si aparece alguno acá se trata como su propio tipo
+        para que NO matchee con FCs del distribuidor."""
         t = str(t or "").upper().strip()
         if "NC" in t or t.startswith("N/C"):
             return "NC"
         if "ND" in t or t.startswith("N/D"):
             return "ND"
-        return "FC"   # FC, FB, RM, etc. todos quedan como FC para el match
+        if t == "RM" or "REMITO" in t:
+            return "RM"
+        return "FC"   # FC, FB y resto quedan como FC
 
     def _primer_no_vacio(serie):
         for v in serie:

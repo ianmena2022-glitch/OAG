@@ -16,6 +16,10 @@ from ..core.config import settings
 TIPOS_FC = {"FC", "FACTURA", "FAC", "F"}
 TIPOS_NC = {"NC", "NOTA DE CREDITO", "NOTA DE CRÉDITO", "NCD", "N/C"}
 TIPOS_ND = {"ND", "NOTA DE DEBITO", "NOTA DE DÉBITO", "NDD", "N/D"}
+# Remitos / movimientos internos (CRM Syngenta los usa para trackear entregas
+# de mercadería). NO son facturas → no se cruzan con la facturación del
+# distribuidor en Paso 3.
+TIPOS_RM = {"RM", "REMITO", "REMITOS", "REM", "R"}
 
 
 # Códigos numéricos AFIP/ARCA → tipo estándar
@@ -42,8 +46,11 @@ def normalizar_tipo_comprobante(tipo) -> str:
             return CODIGOS_ARCA[codigo]
     except (ValueError, TypeError):
         pass
-    # Fallback: match por texto
+    # Fallback: match por texto. Orden importante: chequear RM ANTES que FC
+    # porque el texto "R" podria estar contenido en "FC" via "RA" o algo.
     tipo_upper = str(tipo).upper().strip()
+    if tipo_upper in TIPOS_RM or any(t == tipo_upper for t in TIPOS_RM):
+        return "RM"
     if any(t in tipo_upper for t in TIPOS_NC):
         return "NC"
     if any(t in tipo_upper for t in TIPOS_ND):
