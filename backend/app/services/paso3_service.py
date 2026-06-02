@@ -15,6 +15,7 @@ from .paso1_service import (
     normalizar_tipo_comprobante,
     normalizar_monto,
     normalizar_numero_comprobante,
+    es_articulo_no_producto,
 )
 
 
@@ -277,13 +278,22 @@ def _filtrar_gestion_por_marcas_crm(df_gestion: pd.DataFrame, marcas: set) -> pd
     art_upper = df["articulo"].fillna("").astype(str).str.upper()
     es_nc_nd = df["tipo"].astype(str).isin(["NC", "ND"])
 
+    # Excluir líneas que son ajustes financieros (AJUSTE DE PRECIO, INTERES,
+    # RECARGO, etc.) — no son productos vendidos, distorsionan el cruce con
+    # CRM Syngenta y el informe del Paso 5.
+    es_no_prod = df["articulo"].apply(es_articulo_no_producto)
+    n_no_prod = int(es_no_prod.sum())
+    if n_no_prod:
+        print(f"[PASO 3] Excluidas {n_no_prod} líneas que son ajustes financieros "
+              f"(AJUSTE/INTERES/RECARGO/etc) — no son productos")
+
     if not marcas:
-        # Sin info de marcas → quedarse al menos con NC/ND
-        return df[es_nc_nd].copy()
+        # Sin info de marcas → quedarse al menos con NC/ND (sin ajustes)
+        return df[es_nc_nd & ~es_no_prod].copy()
 
     # Match si CUALQUIER marca está contenida en el articulo
     matches = art_upper.apply(lambda s: any(b in s for b in marcas))
-    return df[matches | es_nc_nd].copy()
+    return df[(matches | es_nc_nd) & ~es_no_prod].copy()
 
 
 def _numero_crm_a_estandar(valor: str) -> str:

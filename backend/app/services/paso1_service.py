@@ -22,6 +22,45 @@ TIPOS_ND = {"ND", "NOTA DE DEBITO", "NOTA DE DÉBITO", "NDD", "N/D"}
 TIPOS_RM = {"RM", "REMITO", "REMITOS", "REM", "R"}
 
 
+# Patrones de "no producto" — strings que aparecen como articulo en NC/ND/FC
+# pero NO corresponden a un producto vendido. Son ajustes financieros que
+# inflarían los rankings, la tabla de apertura y el cruce con CRM.
+# Universal: cualquier ERP que use estos labels va a ser detectado.
+_PATRONES_NO_PRODUCTO = (
+    "AJUSTE",          # AJUSTE DE PRECIO, AJUSTE POR PRECIO
+    "INTERES",         # INTERES POR FINANCIACION, INTERESES
+    "RECARGO",
+    "REINTEGRO",
+    "FINANCIE",        # gastos financieros, FINANCIERO
+    "DIFERENCIA DE CAMBIO",
+    "BONIFICAC",       # BONIFICACION
+    "COMISION",        # COMISIONES
+    "FLETE",           # FLETE / FLETES (servicio, no producto)
+    "GASTO",           # GASTOS DE ENVIO, GASTOS
+    "REDONDEO",
+)
+
+
+def es_articulo_no_producto(articulo) -> bool:
+    """
+    Detecta si un texto de artículo corresponde a un ajuste financiero o
+    movimiento contable (no a un producto real). Usado para excluir estas
+    líneas de los análisis por producto (Paso 2 rankings, Paso 3 cruce CRM,
+    Paso 5 informe). Tolerante a None/NaN.
+    """
+    if articulo is None:
+        return False
+    try:
+        if isinstance(articulo, float) and pd.isna(articulo):
+            return False
+    except Exception:
+        pass
+    a = str(articulo).upper().strip()
+    if not a or a == "NAN":
+        return False
+    return any(p in a for p in _PATRONES_NO_PRODUCTO)
+
+
 # Códigos numéricos AFIP/ARCA → tipo estándar
 CODIGOS_ARCA = {
     # Notas de Crédito (todos los tipos)

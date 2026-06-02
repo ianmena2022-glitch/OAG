@@ -11,7 +11,7 @@ from typing import List, Dict, Optional
 
 from ..ai.clasificador import clasificar_productos
 from ..core.config import settings
-from .paso1_service import normalizar_tipo_comprobante, normalizar_monto
+from .paso1_service import normalizar_tipo_comprobante, normalizar_monto, es_articulo_no_producto
 
 MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
          "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
@@ -29,6 +29,17 @@ def ejecutar_paso2(
     """
     df = pd.read_excel(path_bajada_norm)
     df = _preparar_df(df, anio_analisis)
+
+    # Filtrar ajustes financieros (AJUSTE DE PRECIO, INTERES, RECARGO, etc.)
+    # de los análisis por producto. NO son productos vendidos — inflan los
+    # rankings, la tabla de apertura y el cruce CRM.
+    if not df.empty and "articulo" in df.columns:
+        es_no_prod = df["articulo"].apply(es_articulo_no_producto)
+        n_no_prod = int(es_no_prod.sum())
+        if n_no_prod:
+            print(f"[Paso 2] Excluidas {n_no_prod} líneas de ajustes financieros "
+                  f"(AJUSTE/INTERES/RECARGO/etc) — no son productos")
+            df = df[~es_no_prod].copy()
 
     upload_dir = os.path.join(settings.UPLOAD_DIR, str(expediente_id))
     os.makedirs(upload_dir, exist_ok=True)
