@@ -60,8 +60,11 @@ def leer_archivo_proveedores(path: str) -> dict:
       {
         "por_cuit":    {cuit_normalizado: "ABRIR"|"INCLUIR"},
         "por_nombre":  {nombre_upper: "ABRIR"|"INCLUIR"},
+        "lista":       [{"cuit": cuit_n, "nombre": nombre_u, "accion": ...}, ...]
       }
     El caller intenta match por CUIT primero (más robusto), después por nombre.
+    'lista' preserva la asociación cuit↔nombre↔accion para los proveedores
+    que no aparecen en los recibidos (hay que mostrarlos con $0 en el resumen).
     """
     try:
         df = pd.read_excel(path, dtype=str)
@@ -97,6 +100,7 @@ def leer_archivo_proveedores(path: str) -> dict:
 
     por_cuit = {}
     por_nombre = {}
+    lista = []
 
     def _digits(s):
         return "".join(c for c in str(s or "") if c.isdigit())
@@ -112,22 +116,30 @@ def leer_archivo_proveedores(path: str) -> dict:
                 accion = "ABRIR"
             # Otros valores → tratar como ABRIR (default)
 
-        if col_cuit:
-            cuit_n = _digits(row.get(col_cuit))
-            if cuit_n:
-                por_cuit[cuit_n] = accion
+        cuit_n = _digits(row.get(col_cuit)) if col_cuit else ""
 
+        nombre = ""
         if col_nombre:
             nombre_raw = row.get(col_nombre)
             if nombre_raw is not None and not (isinstance(nombre_raw, float) and pd.isna(nombre_raw)):
-                nombre = str(nombre_raw).strip().upper()
-                if nombre and nombre != "NAN":
-                    por_nombre[nombre] = accion
+                nombre_s = str(nombre_raw).strip().upper()
+                if nombre_s and nombre_s != "NAN":
+                    nombre = nombre_s
 
-    print(f"[PROVEEDORES] Cargados: {len(por_cuit)} por CUIT, "
-          f"{len(por_nombre)} por nombre. "
+        if not cuit_n and not nombre:
+            continue   # fila vacía
+
+        if cuit_n:
+            por_cuit[cuit_n] = accion
+        if nombre:
+            por_nombre[nombre] = accion
+        lista.append({"cuit": cuit_n, "nombre": nombre, "accion": accion})
+
+    print(f"[PROVEEDORES] Cargados {len(lista)} proveedores: "
+          f"{sum(1 for x in lista if x['accion']=='ABRIR')} ABRIR + "
+          f"{sum(1 for x in lista if x['accion']=='INCLUIR')} INCLUIR. "
           f"Accion={'columna detectada' if col_accion else 'sin columna (default ABRIR)'}")
-    return {"por_cuit": por_cuit, "por_nombre": por_nombre}
+    return {"por_cuit": por_cuit, "por_nombre": por_nombre, "lista": lista}
 
 
 def ejecutar_paso4(
@@ -263,10 +275,13 @@ def _generar_resumen_compras(df: pd.DataFrame, proveedores_config: dict) -> List
     Match estrategia:
       1. Por CUIT normalizado (preferido — robusto a variaciones de nombre)
       2. Por nombre upper (fallback si el CUIT no matchea)
-    """
-    if df.empty:
-        return []
 
+    Los proveedores en el archivo de proveedores que NO tienen compras
+    igual aparecen en el resumen con $0 en todos los meses — el archivo
+    "PROVEEDORES COMPETENCIA" lista competidores y plataformas que el
+    auditor quiere ver en el informe aunque el distribuidor no les haya
+    comprado nada (análisis comparativo).
+    """
     por_cuit = (proveedores_config or {}).get("por_cuit", {})
     por_nombre = (proveedores_config or {}).get("por_nombre", {})
 
@@ -274,7 +289,6 @@ def _generar_resumen_compras(df: pd.DataFrame, proveedores_config: dict) -> List
         return "".join(c for c in str(s or "") if c.isdigit())
 
     def _categoria(cuit_raw, nombre):
-        """Devuelve 'ABRIR' | 'INCLUIR' | ''."""
         cuit_n = _digits(cuit_raw)
         if cuit_n and cuit_n in por_cuit:
             return por_cuit[cuit_n]
@@ -284,34 +298,83 @@ def _generar_resumen_compras(df: pd.DataFrame, proveedores_config: dict) -> List
         return ""
 
     result = []
-    proveedores = df["nombre_proveedor"].unique()
+    cuits_procesados = set()        # cuits que ya generaron filas (con compras)
+    nombres_procesados = set()      # idem por nombre (cuando no hay cuit en data)
 
-    for prov in proveedores:
-        df_prov = df[df["nombre_proveedor"] == prov]
-        cuit = df_prov["cuit_proveedor"].iloc[0] if not df_prov.empty else ""
-        categoria = _categoria(cuit, prov)
+    # ── 1. Procesar proveedores que SÍ tienen compras en los recibidos ─────
+    if not df.empty:
+        proveedores = df["nombre_proveedor"].unique()
+        for prov in proveedores:
+            df_prov = df[df["nombre_proveedor"] == prov]
+            cuit = df_prov["cuit_proveedor"].iloc[0] if not df_prov.empty else ""
+            cuit_n = _digits(cuit)
+            if cuit_n:
+                cuits_procesados.add(cuit_n)
+            nombres_procesados.add(str(prov or "").strip().upper())
+            categoria = _categoria(cuit, prov)
 
-        if categoria == "ABRIR":
-            # Apertura por tipo de comprobante: una fila por FC/ND/NC
-            for tipo in ["FC", "ND", "NC"]:
-                df_tipo = df_prov[df_prov["tipo_comprobante"] == tipo]
-                if df_tipo.empty:
-                    continue
-                row = _construir_fila_mensual(df_tipo, f"{prov} — {tipo}", cuit)
-                row["categoria"] = "ABRIR"
+            if categoria == "ABRIR":
+                # Una fila por FC/ND/NC. Si un tipo no tiene movimientos se
+                # omite (no llenamos con ceros: si no hay NCs, no hay fila NC).
+                for tipo in ["FC", "ND", "NC"]:
+                    df_tipo = df_prov[df_prov["tipo_comprobante"] == tipo]
+                    if df_tipo.empty:
+                        continue
+                    row = _construir_fila_mensual(df_tipo, f"{prov} — {tipo}", cuit)
+                    row["categoria"] = "ABRIR"
+                    result.append(row)
+            elif categoria == "INCLUIR":
+                row = _construir_fila_mensual(df_prov, prov, cuit)
+                row["categoria"] = "INCLUIR"
                 result.append(row)
-        elif categoria == "INCLUIR":
-            row = _construir_fila_mensual(df_prov, prov, cuit)
-            row["categoria"] = "INCLUIR"
-            result.append(row)
-        else:
-            row = _construir_fila_mensual(df_prov, prov, cuit)
-            row["categoria"] = ""
-            result.append(row)
+            else:
+                row = _construir_fila_mensual(df_prov, prov, cuit)
+                row["categoria"] = ""
+                result.append(row)
 
-    # Ordenar por total descendente
-    result.sort(key=lambda x: x.get("Total", 0), reverse=True)
+    # ── 2. Agregar proveedores del archivo que NO tuvieron compras ─────────
+    # Aparecen con $0 en todos los meses. Esencial para "PROVEEDORES
+    # COMPETENCIA": el auditor quiere ver listados a todos los competidores
+    # y plataformas marcados, aunque el distribuidor no les haya comprado.
+    lista = (proveedores_config or {}).get("lista", [])
+    sin_compras_count = 0
+    for entry in lista:
+        cuit_n = entry.get("cuit", "")
+        nombre = entry.get("nombre", "")
+        accion = entry.get("accion", "ABRIR")
+        # Saltear si ya quedó cubierto por una fila con compras
+        if cuit_n and cuit_n in cuits_procesados:
+            continue
+        if not cuit_n and nombre and nombre in nombres_procesados:
+            continue
+        nombre_show = nombre or f"(CUIT {cuit_n})"
+        result.append(_fila_vacia(nombre_show, cuit_n, accion))
+        if cuit_n:
+            cuits_procesados.add(cuit_n)
+        if nombre:
+            nombres_procesados.add(nombre)
+        sin_compras_count += 1
+
+    if sin_compras_count:
+        print(f"[Paso 4] {sin_compras_count} proveedor(es) del archivo sin "
+              f"compras en los recibidos → aparecen con $0 en el resumen")
+
+    # Ordenar por total descendente (los con $0 quedan al final naturalmente)
+    result.sort(key=lambda x: abs(x.get("Total", 0)), reverse=True)
     return result
+
+
+def _fila_vacia(nombre: str, cuit: str, categoria: str) -> Dict:
+    """Fila de resumen para un proveedor sin compras (todos los meses en 0)."""
+    fila = {
+        "nombre_proveedor": nombre,
+        "cuit_proveedor": cuit,
+    }
+    for m in MESES:
+        fila[m] = 0.0
+    fila["Total"] = 0.0
+    fila["categoria"] = categoria
+    return fila
 
 
 def _construir_fila_mensual(df: pd.DataFrame, nombre: str, cuit: str) -> Dict:
