@@ -616,23 +616,23 @@ def ejecutar_paso4(
     path_recibidos = _get_archivo_path(exp_id, TipoArchivo.COMPROBANTES_RECIBIDOS, db)
     path_tc = _get_archivo_path(exp_id, TipoArchivo.TIPOS_CAMBIO, db)
 
-    proveedores_apertura = []
+    # Archivo de proveedores: configura cuáles abrir en FC/NC/ND ("ABRIR")
+    # y cuáles incluir siempre en el top 90% aunque sean chicos ("INCLUIR").
+    # Formato flexible — ver paso4_service.leer_archivo_proveedores.
+    proveedores_config = {"por_cuit": {}, "por_nombre": {}}
     arch_prov = db.query(Archivo).filter(
         Archivo.expediente_id == exp_id,
         Archivo.tipo == TipoArchivo.PROVEEDORES_APERTURA,
     ).first()
     if arch_prov:
-        import pandas as pd
-        df_prov = pd.read_excel(arch_prov.path, dtype=str)
-        col = df_prov.columns[0]
-        proveedores_apertura = df_prov[col].dropna().str.strip().str.upper().tolist()
+        proveedores_config = paso4_service.leer_archivo_proveedores(arch_prov.path)
 
     _t0 = time.time()
     _log_paso_inicio(db, exp_id, current_user.id, 4)
     import traceback
     try:
         resultado = paso4_service.ejecutar_paso4(
-            path_recibidos, path_tc, proveedores_apertura, exp.anio_analisis
+            path_recibidos, path_tc, proveedores_config, exp.anio_analisis
         )
     except Exception as e:
         _log_paso_error(db, exp_id, current_user.id, 4, _t0, e, traceback.format_exc())

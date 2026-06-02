@@ -60,24 +60,34 @@ def ejecutar_paso5(
 
 
 def _filtrar_top90(resumen: List[Dict]) -> List[Dict]:
-    """Retorna los proveedores que representan el 90% del total de compras."""
+    """
+    Retorna los proveedores a incluir en el informe:
+      - Siempre los marcados como ABRIR o INCLUIR en el archivo de proveedores
+        (aunque su monto sea chico)
+      - Más los demás proveedores hasta cubrir el 90% del total
+    """
     if not resumen:
         return []
 
-    total = sum(r.get("Total", 0) for r in resumen)
-    if total == 0:
-        return resumen
+    siempre = [r for r in resumen if r.get("categoria") in ("ABRIR", "INCLUIR")]
+    resto = [r for r in resumen if r.get("categoria") not in ("ABRIR", "INCLUIR")]
 
-    ordenado = sorted(resumen, key=lambda x: abs(x.get("Total", 0)), reverse=True)
+    total_resto = sum(abs(r.get("Total", 0)) for r in resto)
+    if total_resto == 0:
+        # No hay otros — devolver solo los siempre (o todo si tampoco hay siempre)
+        return siempre if siempre else resumen
+
+    ordenado = sorted(resto, key=lambda x: abs(x.get("Total", 0)), reverse=True)
     acumulado = 0
-    result = []
+    top = []
     for r in ordenado:
-        result.append(r)
+        top.append(r)
         acumulado += abs(r.get("Total", 0))
-        if acumulado / total >= 0.90:
+        if acumulado / total_resto >= 0.90:
             break
 
-    return result
+    # Ordenar el resultado final por Total descendente, conservando todos
+    return sorted(siempre + top, key=lambda x: abs(x.get("Total", 0)), reverse=True)
 
 
 def _estilo_header(ws, row: int, cols: list, color: str = COLOR_HEADER, font_color: str = COLOR_HEADER_FONT):
