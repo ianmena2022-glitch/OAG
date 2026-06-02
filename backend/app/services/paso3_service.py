@@ -275,25 +275,29 @@ def _filtrar_gestion_por_marcas_crm(df_gestion: pd.DataFrame, marcas: set) -> pd
     if "tipo" not in df.columns:
         df["tipo"] = ""
 
-    art_upper = df["articulo"].fillna("").astype(str).str.upper()
-    es_nc_nd = df["tipo"].astype(str).isin(["NC", "ND"])
-
-    # Excluir líneas que son ajustes financieros (AJUSTE DE PRECIO, INTERES,
-    # RECARGO, etc.) — no son productos vendidos, distorsionan el cruce con
-    # CRM Syngenta y el informe del Paso 5.
+    # Vaciar el articulo en filas que son ajustes financieros para que NO se
+    # muestre "AJUSTE DE PRECIO" como producto en el resultado del cruce.
+    # PERO la fila se conserva (es un NC fiscal real con número) — si su
+    # número matchea con un NC del CRM, va a aparecer correctamente como OK
+    # o DIFERENCIA y el producto visible viene del CRM.
     es_no_prod = df["articulo"].apply(es_articulo_no_producto)
     n_no_prod = int(es_no_prod.sum())
     if n_no_prod:
-        print(f"[PASO 3] Excluidas {n_no_prod} líneas que son ajustes financieros "
-              f"(AJUSTE/INTERES/RECARGO/etc) — no son productos")
+        df.loc[es_no_prod, "articulo"] = ""
+        print(f"[PASO 3] {n_no_prod} líneas con etiqueta de ajuste financiero "
+              f"(AJUSTE/INTERES/RECARGO/etc): se vació el articulo para no "
+              f"mostrarlo como producto, pero la NC se conserva para el cruce.")
+
+    art_upper = df["articulo"].fillna("").astype(str).str.upper()
+    es_nc_nd = df["tipo"].astype(str).isin(["NC", "ND"])
 
     if not marcas:
-        # Sin info de marcas → quedarse al menos con NC/ND (sin ajustes)
-        return df[es_nc_nd & ~es_no_prod].copy()
+        # Sin info de marcas → quedarse al menos con NC/ND
+        return df[es_nc_nd].copy()
 
     # Match si CUALQUIER marca está contenida en el articulo
     matches = art_upper.apply(lambda s: any(b in s for b in marcas))
-    return df[(matches | es_nc_nd) & ~es_no_prod].copy()
+    return df[matches | es_nc_nd].copy()
 
 
 def _numero_crm_a_estandar(valor: str) -> str:

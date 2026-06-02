@@ -168,9 +168,17 @@ def ejecutar_paso4(
     df = _procesar_recibidos(df, tc_map, anio_analisis, recibidos_info["mapping"])
 
     resumen = _generar_resumen_compras(df, proveedores_config or {})
+    # total_proveedores cuenta nombres únicos en el resumen final (incluye los
+    # de "PROVEEDORES COMPETENCIA" con $0). El conteo SIN $0 va aparte para
+    # el reporte.
+    nombres_unicos = {r.get("nombre_proveedor","") for r in resumen if r.get("nombre_proveedor")}
+    con_compras = {r.get("nombre_proveedor","") for r in resumen
+                   if r.get("nombre_proveedor") and abs(r.get("Total",0)) > 0}
     totales = {
         "total_compras_usd": round(df["monto_usd"].sum(), 2),
-        "total_proveedores": df["nombre_proveedor"].nunique(),
+        "total_proveedores": len(nombres_unicos),
+        "proveedores_con_compras": len(con_compras),
+        "proveedores_sin_compras": len(nombres_unicos) - len(con_compras),
     }
 
     # Diagnóstico estructurado
