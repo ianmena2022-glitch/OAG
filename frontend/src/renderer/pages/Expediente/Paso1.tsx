@@ -106,8 +106,7 @@ export default function Paso1({ expediente }: Props) {
 
   const canRun =
     archivosGestion.length > 0 &&
-    getArchivo('COMPROBANTES_EMITIDOS') &&
-    getArchivo('TIPOS_CAMBIO')
+    getArchivo('COMPROBANTES_EMITIDOS')
 
   const columns: Column<any>[] = [
     { key: 'fecha', label: 'Fecha', type: 'date', width: '90px' },
@@ -277,7 +276,7 @@ export default function Paso1({ expediente }: Props) {
           )}
         </div>
 
-        {/* ARCA + Tipos de Cambio — un solo archivo cada uno */}
+        {/* ARCA — Tipos de Cambio se gestionan globalmente en Administración */}
         <div className="grid grid-cols-2 gap-4">
           <FileUpload
             label="Comprobantes Emitidos (ARCA)"
@@ -287,14 +286,15 @@ export default function Paso1({ expediente }: Props) {
             isUploaded={!!getArchivo('COMPROBANTES_EMITIDOS')}
             uploadedName={getArchivo('COMPROBANTES_EMITIDOS')?.nombre_original}
           />
-          <FileUpload
-            label="Tipos de Cambio"
-            description="Archivo con fecha y cotización ARS/USD"
-            onUpload={(f) => handleUpload('TIPOS_CAMBIO', f)}
-            isLoading={uploading['TIPOS_CAMBIO']}
-            isUploaded={!!getArchivo('TIPOS_CAMBIO')}
-            uploadedName={getArchivo('TIPOS_CAMBIO')?.nombre_original}
-          />
+          <div className="flex items-start gap-2 p-3 rounded border border-oag-border bg-oag-light/50 text-xs text-oag-muted">
+            <Info size={14} className="text-oag-blue mt-0.5 flex-shrink-0" />
+            <p>
+              <strong className="text-oag-text">Tipos de Cambio:</strong> ya no hace falta
+              subirlos por expediente. Se gestionan en
+              {' '}<em>Administración → Tipos de Cambio</em>{' '}
+              y se aplican a todos los expedientes.
+            </p>
+          </div>
         </div>
       </div>
 

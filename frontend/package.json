@@ -1,6 +1,6 @@
 {
   "name": "ogsa-auditoria",
-  "version": "1.5.11",
+  "version": "1.5.12",
   "description": "OGSA Sistema de Auditorías Comerciales",
   "main": "out/main/index.js",
   "author": "OGSA Auditores",

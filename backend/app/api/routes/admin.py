@@ -15,9 +15,10 @@ from ...core.database import get_db
 from ...core.deps import get_current_user, require_admin
 from ...core.auth import get_password_hash
 from ...models.user import User
-from ...models.expediente import MaestroSyngenta, Glosario
+from ...models.expediente import MaestroSyngenta, Glosario, TipoCambioMaestro
 from ...schemas.auth import UserCreate, UserResponse
 from ...ai.smart_parser import parsear_excel
+from ...services.paso1_service import normalizar_monto
 
 
 MAESTRO_SCHEMA = {
@@ -37,6 +38,12 @@ GLOSARIO_SCHEMA = {
     "nombre_estandar": ["nombre estandar", "nombre estándar", "glosario",
                        "nombre glosario", "estandar", "estándar",
                        "nombre normalizado", "normalizado"],
+}
+
+TC_SCHEMA = {
+    "fecha": ["fecha", "día", "dia", "date", "periodo", "período"],
+    "cotizacion": ["cotizacion", "cotización", "cambio", "tc", "t/c", "dolar",
+                   "dólar", "usd", "valor", "precio", "venta", "tipo de cambio"],
 }
 
 
@@ -257,4 +264,101 @@ def obtener_glosario(db: Session = Depends(get_db), _user: User = Depends(get_cu
     return {
         "total": total,
         "items": [{"nombre_original": i.nombre_original, "nombre_estandar": i.nombre_estandar} for i in items],
+    }
+
+
+# ── Tipos de Cambio (maestro global) ─────────────────────────────────────────
+
+@router.post("/tipos-cambio")
+def cargar_tipos_cambio(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """
+    Carga el maestro global de tipos de cambio desde un Excel.
+    Columnas esperadas: fecha + cotización (USD/ARS).
+    Al cargar, reemplaza el maestro completo.
+    Este maestro se usa para todos los expedientes (Paso 1 y Paso 4) — los
+    expedientes ya no necesitan subir su propio archivo de TC.
+    """
+    content = file.file.read()
+    tmp_path = _guardar_temp(content)
+    try:
+        resultado = parsear_excel(
+            path=tmp_path,
+            task_id="tipos_cambio",
+            schema=TC_SCHEMA,
+            columnas_criticas=["fecha", "cotizacion"],
+        )
+        df = resultado["df"]
+        mapping = resultado["mapping"]
+        col_fecha = mapping.get("fecha") or df.columns[0]
+        col_tc = mapping.get("cotizacion") or (df.columns[1] if len(df.columns) > 1 else df.columns[0])
+
+        # Marcar todos los anteriores como inactivos
+        db.query(TipoCambioMaestro).update({"is_active": False})
+        db.flush()
+
+        registros = []
+        descartados = 0
+        for _, row in df.iterrows():
+            try:
+                fecha = pd.to_datetime(row[col_fecha])
+                tc = normalizar_monto(row[col_tc])
+                if tc <= 0 or pd.isna(fecha):
+                    descartados += 1
+                    continue
+                registros.append({
+                    "fecha": fecha.date(),
+                    "cotizacion_usd": tc,
+                    "is_active": True,
+                })
+            except (ValueError, TypeError):
+                descartados += 1
+                continue
+
+        if registros:
+            db.bulk_insert_mappings(TipoCambioMaestro, registros)
+
+        db.commit()
+        count = len(registros)
+        return {
+            "message": f"Tipos de cambio actualizados: {count} fechas cargadas"
+                       + (f" ({descartados} descartadas)" if descartados else ""),
+            "count": count,
+            "descartados": descartados,
+            "mapping": mapping,
+            "metodo_deteccion": resultado["metodo"],
+            "confianza": resultado["confianza"],
+            "warnings": resultado["warnings"],
+            "columnas_archivo": resultado.get("columnas_archivo", []),
+            "columnas_faltantes": resultado.get("columnas_faltantes", []),
+            "columnas_no_mapeadas": resultado.get("columnas_no_mapeadas", []),
+        }
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+@router.get("/tipos-cambio")
+def obtener_tipos_cambio(
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    q = db.query(TipoCambioMaestro).filter(TipoCambioMaestro.is_active == True)
+    total = q.count()
+    # Muestra: últimos 200 ordenados por fecha desc
+    items = q.order_by(TipoCambioMaestro.fecha.desc()).limit(200).all()
+    return {
+        "total": total,
+        "items": [
+            {
+                "fecha": i.fecha.isoformat() if i.fecha else None,
+                "cotizacion_usd": i.cotizacion_usd,
+            }
+            for i in items
+        ],
     }

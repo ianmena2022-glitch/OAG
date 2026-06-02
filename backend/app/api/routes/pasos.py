@@ -156,13 +156,22 @@ def ejecutar_paso1(
         paths_bajada.append((a.path, a.nombre_original))
 
     path_emitidos = _get_archivo_path(exp_id, TipoArchivo.COMPROBANTES_EMITIDOS, db)
-    path_tc = _get_archivo_path(exp_id, TipoArchivo.TIPOS_CAMBIO, db)
+
+    # Tipos de cambio: maestro global (Administración). Si no hay, error 400.
+    from ...models.expediente import TipoCambioMaestro
+    tc_count = db.query(TipoCambioMaestro).filter(TipoCambioMaestro.is_active == True).count()
+    if tc_count == 0:
+        raise HTTPException(
+            400,
+            "No hay tipos de cambio cargados. Pedile al administrador que los "
+            "suba en Administración → Tipos de Cambio."
+        )
 
     _t0 = time.time()
     _log_paso_inicio(db, exp_id, current_user.id, 1)
     import traceback
     try:
-        resultado = paso1_service.ejecutar_paso1(paths_bajada, path_emitidos, path_tc, exp_id)
+        resultado = paso1_service.ejecutar_paso1(paths_bajada, path_emitidos, exp_id, db=db)
     except Exception as e:
         _log_paso_error(db, exp_id, current_user.id, 1, _t0, e, traceback.format_exc())
         raise HTTPException(500, f"Error en Paso 1: {str(e)}")
@@ -614,7 +623,16 @@ def ejecutar_paso4(
     exp = _get_exp(exp_id, db, current_user)
 
     path_recibidos = _get_archivo_path(exp_id, TipoArchivo.COMPROBANTES_RECIBIDOS, db)
-    path_tc = _get_archivo_path(exp_id, TipoArchivo.TIPOS_CAMBIO, db)
+
+    # Tipos de cambio: maestro global (Administración). Si no hay, error 400.
+    from ...models.expediente import TipoCambioMaestro
+    tc_count = db.query(TipoCambioMaestro).filter(TipoCambioMaestro.is_active == True).count()
+    if tc_count == 0:
+        raise HTTPException(
+            400,
+            "No hay tipos de cambio cargados. Pedile al administrador que los "
+            "suba en Administración → Tipos de Cambio."
+        )
 
     # Archivo de proveedores: configura cuáles abrir en FC/NC/ND ("ABRIR")
     # y cuáles incluir siempre en el top 90% aunque sean chicos ("INCLUIR").
@@ -632,7 +650,7 @@ def ejecutar_paso4(
     import traceback
     try:
         resultado = paso4_service.ejecutar_paso4(
-            path_recibidos, path_tc, proveedores_config, exp.anio_analisis
+            path_recibidos, proveedores_config, exp.anio_analisis, db=db
         )
     except Exception as e:
         _log_paso_error(db, exp_id, current_user.id, 4, _t0, e, traceback.format_exc())

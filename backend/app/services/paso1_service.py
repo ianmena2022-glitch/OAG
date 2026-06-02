@@ -331,8 +331,32 @@ GESTION_EXCLUSIONES = {
 }
 
 
-def leer_tipos_cambio(path: str) -> dict:
-    """Lee archivo de tipos de cambio usando smart_parser. Retorna {fecha_str: cotizacion}"""
+def leer_tipos_cambio(path: str | None = None, db=None) -> dict:
+    """
+    Lee tipos de cambio. Retorna {fecha_str: cotizacion}.
+
+    Fuente:
+    - Si se pasa `db`: lee desde el maestro global (TipoCambioMaestro). Esta es
+      la fuente PRINCIPAL desde que los TC se gestionan en Administración.
+    - Si se pasa `path` (legacy / fallback): parsea un archivo Excel.
+
+    Si no hay datos en ningún lado, retorna un dict vacío y los pasos detectarán
+    "sin_tc" para cada comprobante (queda en USD 0 hasta cargar TC).
+    """
+    if db is not None:
+        from ..models.expediente import TipoCambioMaestro
+        tc_map = {}
+        items = db.query(TipoCambioMaestro).filter(TipoCambioMaestro.is_active == True).all()
+        for it in items:
+            if it.fecha and it.cotizacion_usd and it.cotizacion_usd > 0:
+                tc_map[it.fecha.strftime("%Y-%m-%d")] = float(it.cotizacion_usd)
+        print(f"[TC] fuente=maestro_db fechas={len(tc_map)}")
+        return tc_map
+
+    if not path:
+        print("[TC] sin path ni db — retornando dict vacío")
+        return {}
+
     resultado = parsear_excel(
         path=path,
         task_id="tipos_cambio",
@@ -344,7 +368,7 @@ def leer_tipos_cambio(path: str) -> dict:
     col_fecha = mapping.get("fecha") or df.columns[0]
     col_tc = mapping.get("cotizacion") or (df.columns[1] if len(df.columns) > 1 else df.columns[0])
 
-    print(f"[TC] método={resultado['metodo']} conf={resultado['confianza']:.2f} "
+    print(f"[TC] fuente=archivo método={resultado['metodo']} conf={resultado['confianza']:.2f} "
           f"fecha={col_fecha} tc={col_tc} warnings={resultado['warnings']}")
 
     tc_map = {}
@@ -632,16 +656,17 @@ def _agregar_por_comprobante(registros: list) -> list:
 def ejecutar_paso1(
     paths_bajada: list,   # lista de (path, nombre_original) tuples
     path_emitidos: str,
-    path_tc: str,
     expediente_id: int,
+    db=None,
 ) -> dict:
     """
     Ejecuta el cruce completo del Paso 1.
     paths_bajada puede contener múltiples archivos ERP — cada uno se parsea
     individualmente con su propio schema/tipo_inferido y los registros se consolidan.
+    Los tipos de cambio se leen del maestro global (Administración → Tipos de Cambio).
     """
-    # 1. Cargar tipos de cambio
-    tc_map = leer_tipos_cambio(path_tc)
+    # 1. Cargar tipos de cambio desde el maestro global
+    tc_map = leer_tipos_cambio(db=db)
 
     # 2. Procesar TODOS los archivos de bajada de gestión
     all_registros_gestion = []

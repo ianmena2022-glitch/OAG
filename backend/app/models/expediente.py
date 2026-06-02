@@ -121,6 +121,21 @@ class Glosario(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class TipoCambioMaestro(Base):
+    """
+    Tipos de cambio globales. Reemplazan al archivo por expediente:
+    si el expediente no sube su propio archivo de TC, se usa este maestro.
+    Si sube uno, el del expediente tiene prioridad.
+    """
+    __tablename__ = "tipos_cambio_maestro"
+
+    id = Column(Integer, primary_key=True, index=True)
+    fecha = Column(Date, nullable=False, index=True)
+    cotizacion_usd = Column(Float, nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class LogEvento(Base):
     """
     Log estructurado por expediente. Captura qué pasó en cada paso

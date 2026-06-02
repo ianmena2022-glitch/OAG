@@ -50,7 +50,7 @@ export default function Paso4({ expediente }: Props) {
     onError: (err: any) => push('error', err.response?.data?.detail || 'Error en Paso 4'),
   })
 
-  const canRun = getArchivo('COMPROBANTES_RECIBIDOS') && getArchivo('TIPOS_CAMBIO')
+  const canRun = !!getArchivo('COMPROBANTES_RECIBIDOS')
   const resumen = resultado?.resumen || []
   const totales = resultado?.totales || {}
 
@@ -84,7 +84,8 @@ export default function Paso4({ expediente }: Props) {
           />
         </div>
         <p className="text-xs text-oag-muted mt-2">
-          * Los tipos de cambio se toman del archivo ya cargado en el Paso 1.
+          * Los tipos de cambio se gestionan en <em>Administración → Tipos de Cambio</em>
+          {' '}(maestro global, sin upload por expediente).
         </p>
       </div>
 

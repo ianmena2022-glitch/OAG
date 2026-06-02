@@ -144,9 +144,9 @@ def leer_archivo_proveedores(path: str) -> dict:
 
 def ejecutar_paso4(
     path_recibidos: str,
-    path_tc: str,
     proveedores_config: dict,
     anio_analisis: int,
+    db=None,
 ) -> dict:
     """
     Ejecuta el análisis de compras.
@@ -162,8 +162,10 @@ def ejecutar_paso4(
 
     Si el archivo de proveedores no se cargó, proveedores_config viene vacío y
     todos los proveedores quedan sin categoría (comportamiento default).
+
+    Los tipos de cambio se leen del maestro global (Administración → Tipos de Cambio).
     """
-    tc_map = leer_tipos_cambio(path_tc)
+    tc_map = leer_tipos_cambio(db=db)
     df, recibidos_info = _leer_comprobantes_recibidos(path_recibidos)
     df = _procesar_recibidos(df, tc_map, anio_analisis, recibidos_info["mapping"])
 

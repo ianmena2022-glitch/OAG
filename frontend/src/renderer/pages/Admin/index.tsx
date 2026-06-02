@@ -3,10 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { adminAPI } from '../../lib/api'
 import { useNotificationStore } from '../../store'
 import FileUpload from '../../components/FileUpload'
-import { Users, Database, BookOpen, Loader, CheckCircle, XCircle, Plus, Sparkles, AlertTriangle } from 'lucide-react'
+import { Users, Database, BookOpen, DollarSign, Loader, CheckCircle, XCircle, Plus, Sparkles, AlertTriangle } from 'lucide-react'
 import { cn } from '../../lib/utils'
 
-type Tab = 'usuarios' | 'maestro' | 'glosario'
+type Tab = 'usuarios' | 'maestro' | 'glosario' | 'tipos_cambio'
 
 interface ParserInfo {
   count?: number
@@ -129,6 +129,7 @@ export default function AdminPage() {
           { key: 'usuarios', label: 'Usuarios', icon: Users },
           { key: 'maestro', label: 'Maestro Syngenta', icon: Database },
           { key: 'glosario', label: 'Glosario', icon: BookOpen },
+          { key: 'tipos_cambio', label: 'Tipos de Cambio', icon: DollarSign },
         ].map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -149,6 +150,7 @@ export default function AdminPage() {
       {tab === 'usuarios' && <TabUsuarios />}
       {tab === 'maestro' && <TabMaestro />}
       {tab === 'glosario' && <TabGlosario />}
+      {tab === 'tipos_cambio' && <TabTiposCambio />}
     </div>
   )
 }
@@ -429,6 +431,88 @@ function TabGlosario() {
                   <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-oag-zebra'}>
                     <td className="table-cell">{g.nombre_original}</td>
                     <td className="table-cell font-medium text-oag-blue">{g.nombre_estandar}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+function TabTiposCambio() {
+  const qc = useQueryClient()
+  const { push } = useNotificationStore()
+  const [uploading, setUploading] = useState(false)
+  const [uploadInfo, setUploadInfo] = useState<any>(null)
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['tipos-cambio'],
+    queryFn: () => adminAPI.obtenerTiposCambio().then((r) => r.data),
+  })
+
+  const total = data?.total ?? 0
+  const items = data?.items ?? []
+
+  const handleUpload = async (file: File) => {
+    setUploading(true)
+    try {
+      const res = await adminAPI.cargarTiposCambio(file)
+      setUploadInfo(res.data)
+      qc.invalidateQueries({ queryKey: ['tipos-cambio'] })
+      push('success', res.data.message || 'Tipos de cambio actualizados')
+    } catch (err: any) {
+      push('error', err.response?.data?.detail || 'Error al cargar tipos de cambio')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="card p-5">
+        <h3 className="section-title">Tipos de Cambio (maestro global)</h3>
+        <p className="text-xs text-oag-muted mb-4">
+          Archivo Excel con dos columnas: <strong>fecha</strong> y <strong>cotización</strong> (ARS/USD).
+          Al cargar, reemplaza el maestro completo. Este maestro se usa para
+          convertir a USD en el Paso 1 y Paso 4 de <em>todos</em> los expedientes —
+          ya no hace falta subir el archivo de TC por expediente.
+        </p>
+        <div className="max-w-sm">
+          <FileUpload
+            label="Archivo Tipos de Cambio (.xlsx)"
+            onUpload={handleUpload}
+            isLoading={uploading}
+            isUploaded={total > 0}
+            uploadedName={total > 0 ? `${total} fechas cargadas` : undefined}
+          />
+        </div>
+        {uploadInfo && (
+          <ParserInfoCard info={uploadInfo} />
+        )}
+      </div>
+
+      {isLoading ? (
+        <Loader size={20} className="animate-spin text-oag-muted" />
+      ) : items.length > 0 && (
+        <div className="card p-5">
+          <h3 className="section-title">
+            Muestra ({items.length} de {total} fechas) — más recientes
+          </h3>
+          <div className="overflow-auto max-h-80">
+            <table className="w-full text-xs border-collapse">
+              <thead><tr>
+                <th className="table-header text-left">Fecha</th>
+                <th className="table-header text-right">Cotización USD</th>
+              </tr></thead>
+              <tbody>
+                {items.map((t: any, i: number) => (
+                  <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-oag-zebra'}>
+                    <td className="table-cell font-medium">{t.fecha}</td>
+                    <td className="table-cell text-right font-mono">{t.cotizacion_usd?.toFixed(4)}</td>
                   </tr>
                 ))}
               </tbody>

@@ -130,4 +130,10 @@ export const adminAPI = {
     return api.post('/api/admin/glosario', form)
   },
   obtenerGlosario: () => api.get('/api/admin/glosario'),
+  cargarTiposCambio: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.post('/api/admin/tipos-cambio', form)
+  },
+  obtenerTiposCambio: () => api.get('/api/admin/tipos-cambio'),
 }
