@@ -286,15 +286,6 @@ export default function Paso1({ expediente }: Props) {
             isUploaded={!!getArchivo('COMPROBANTES_EMITIDOS')}
             uploadedName={getArchivo('COMPROBANTES_EMITIDOS')?.nombre_original}
           />
-          <div className="flex items-start gap-2 p-3 rounded border border-oag-border bg-oag-light/50 text-xs text-oag-muted">
-            <Info size={14} className="text-oag-blue mt-0.5 flex-shrink-0" />
-            <p>
-              <strong className="text-oag-text">Tipos de Cambio:</strong> ya no hace falta
-              subirlos por expediente. Se gestionan en
-              {' '}<em>Administración → Tipos de Cambio</em>{' '}
-              y se aplican a todos los expedientes.
-            </p>
-          </div>
         </div>
       </div>
 
