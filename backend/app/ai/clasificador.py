@@ -44,11 +44,25 @@ ES agroquímico:
   - Fungicidas (mancozeb, tebuconazole, azoxystrobin, etc.)
   - Fertilizantes (urea, fosfatos, nitrógeno, micronutrientes, etc.)
   - Coadyuvantes / adherentes / aceites agrícolas
-  - Inoculantes para semillas y curasemillas
+  - Inoculantes (productos para inocular semillas, NO semillas inoculadas)
+  - Curasemillas vendidos como producto independiente (ej. Maxim, Cruiser,
+    Vibrance) — el producto en sí es el principio activo
   - Acaricidas, nematicidas, rodenticidas de uso agrícola
+  - Bioestimulantes / reguladores de crecimiento
 
-NO es agroquímico:
-  - Semillas sin curasemilla
+NO es agroquímico (categoría separada en el informe ejecutivo):
+  - SEMILLAS de cualquier tipo, incluso tratadas, curadas, inoculadas o
+    con tratamiento de fábrica. La SEMILLA TRATADA es una SEMILLA, no un
+    agroquímico — el principio activo va incluido pero el producto vendido
+    es la semilla. Ejemplos típicos que son SEMILLA (no agroquímico):
+      - "MAIZ NIDERA AX7761VT3P TRATADO 80MIL SEMILLA" → NO
+      - "GIRASOL NIDERA NS1113CL TRATADO 180MIL SEM" → NO
+      - "SEM SOJA NS 3220 STS PRIMU BIG BAG" → NO
+      - "MAÍZ DK 7210 VT3P TRATADO" → NO
+      - "SOJA RR2 TRATADA CON CRUISER" → NO (la semilla es lo principal)
+    Palabras clave que indican SEMILLA: "MAIZ", "MAÍZ", "SOJA", "GIRASOL",
+    "TRIGO", "SORGO", "CEBADA", "SEMILLA", "SEM ", "SEM.", "BOLSA",
+    "BIG BAG", "MIL SEM", "MIL SEMILLA", combinados con "TRATADO/A".
   - Maquinaria, repuestos, herramientas, bolsas silo
   - Alimentos para animales (forrajes, balanceados)
   - Veterinarios (antibióticos, antiparasitarios, vacunas)
@@ -82,7 +96,9 @@ modernas que actualmente comercializa Syngenta Argentina):
 Herbicidas: Gramoxone, Touchdown (Sulfosato Touchdown), Dual Gold, Callisto,
 Lumax, Camix, Halex GT, Axial, Axial Plus, Acuron (Acuron Uno), Boxer,
 Reflex, Sequence, Peak, Lambolt, Nuvoxl, Traspect, Voleris, Spirit,
-Pack Gold, Trophy, Adengo.
+Pack Gold, Trophy, Adengo, Banvel, Gesaprim, Gesagard, Bicep,
+Atrazina Syngenta, Flontus, Eforia, Borja, Enelan, Festio, Chikara,
+Clearsol, Carexo.
 
 Fungicidas: Amistar, Amistar Top, Priori, Priori Xtra, Quadris, Tilt,
 Bravo, Cherokee, Score, Daconil, Folicur (cuando es Syngenta), Elatus,
