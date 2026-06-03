@@ -33,6 +33,23 @@ RECIBIDOS_SCHEMA = {
     "moneda": ["moneda", "mon"],
     "tipo_cambio": ["tipo de cambio", "t/c", "tc", "cambio"],
     "monto_total": ["importe total", "imp. total", "imp total", "total"],
+    # Columnas para calcular monto NETO (sin IVA) — el auditor humano usa neto,
+    # no total. Si están presentes, se prefieren sobre monto_total.
+    # ARCA típicamente trae: "Imp. Neto Gravado Total" (suma de todos los
+    # netos por tasa de IVA) + columnas adicionales por cada tasa
+    # ("Imp. Neto Gravado IVA 21%", "Imp. Neto Gravado IVA 10,5%", etc.) —
+    # SIEMPRE preferimos el "Total" porque la per-tasa no abarca todos los
+    # comprobantes del proveedor.
+    "monto_neto_gravado": ["imp. neto gravado total", "neto gravado total",
+                            "importe neto gravado total",
+                            "imp. neto gravado", "neto gravado",
+                            "importe neto gravado", "imp. neto"],
+    "monto_neto_no_gravado": ["imp. neto no gravado", "imp neto no gravado",
+                               "neto no gravado", "importe neto no gravado"],
+    "monto_op_exentas": ["imp. op. exentas", "imp op exentas", "op. exentas",
+                          "operaciones exentas", "imp. exentas", "exentas"],
+    "monto_iva": ["total iva", "iva total", "imp. total iva", "importe total iva",
+                   "imp. iva", "importe iva", "iva"],
 }
 
 RECIBIDOS_EXCLUSIONES = {
@@ -41,6 +58,14 @@ RECIBIDOS_EXCLUSIONES = {
     "cuit_proveedor": ["receptor"],
     "nombre_proveedor": ["receptor"],
     "fecha": ["vencimiento", "vto"],
+    # Para los netos: excluir las columnas per-tasa (IVA 0%, 2.5%, 5%, 10.5%,
+    # 21%, 27%) que ARCA pone al lado del Total. Solo queremos el Total.
+    "monto_neto_gravado": ["no gravado", "exenta", "iva 0%", "iva 2,5%", "iva 2.5%",
+                            "iva 5%", "iva 10,5%", "iva 10.5%", "iva 21%", "iva 27%",
+                            "percep", "retenc"],
+    "monto_iva": ["neto", "percep", "retenc",
+                   "iva 0%", "iva 2,5%", "iva 2.5%", "iva 5%",
+                   "iva 10,5%", "iva 10.5%", "iva 21%", "iva 27%"],
 }
 
 MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -221,7 +246,16 @@ def _leer_comprobantes_recibidos(path: str):
 
 
 def _procesar_recibidos(df: pd.DataFrame, tc_map: dict, anio: int, mapping: dict = None) -> pd.DataFrame:
-    """Normaliza y convierte a USD los comprobantes recibidos usando el mapping del smart_parser."""
+    """
+    Normaliza y convierte a USD los comprobantes recibidos.
+
+    El monto que se usa para Anexo I es el NETO (sin IVA), no el total — el
+    auditor humano reporta los netos. Se calcula con esta cascada:
+      1) Si hay netos en ARCA: neto_gravado + neto_no_gravado + op_exentas
+      2) Si hay IVA pero no netos: total - iva
+      3) Fallback: total (mismo comportamiento legacy — útil si el archivo no
+         trae netos discriminados, ej. fuentes no-ARCA).
+    """
     mapping = mapping or {}
     col_fecha = mapping.get("fecha")
     col_tipo = mapping.get("tipo_comprobante")
@@ -232,6 +266,21 @@ def _procesar_recibidos(df: pd.DataFrame, tc_map: dict, anio: int, mapping: dict
     col_moneda = mapping.get("moneda")
     col_tc = mapping.get("tipo_cambio")
     col_total = mapping.get("monto_total")
+    col_neto_g = mapping.get("monto_neto_gravado")
+    col_neto_ng = mapping.get("monto_neto_no_gravado")
+    col_exentas = mapping.get("monto_op_exentas")
+    col_iva = mapping.get("monto_iva")
+
+    # Diagnóstico: una sola vez por archivo, decir qué estrategia se va a usar
+    if col_neto_g or col_neto_ng:
+        print(f"[Recibidos] Usando NETO de columnas: gravado={col_neto_g} "
+              f"no_gravado={col_neto_ng} exentas={col_exentas}")
+    elif col_iva and col_total:
+        print(f"[Recibidos] Usando NETO = total - iva (iva={col_iva}, total={col_total})")
+    else:
+        print(f"[Recibidos] ATENCION: no se detectaron columnas de neto ni IVA → "
+              f"usando TOTAL como monto. Esto sobreestima compras en ~21% si "
+              f"los comprobantes son IVA gravado. Verifica el archivo (col total={col_total}).")
 
     result = []
     for _, row in df.iterrows():
@@ -254,7 +303,23 @@ def _procesar_recibidos(df: pd.DataFrame, tc_map: dict, anio: int, mapping: dict
             tc_val = normalizar_monto(row.get(col_tc)) if col_tc else 0
             monto_total = normalizar_monto(row.get(col_total, 0))
 
-            monto_usd = _convertir_a_usd(monto_total, moneda, tc_val, fecha, tc_map)
+            # ── Cascada para calcular el NETO (sin IVA) ──────────────────
+            monto = 0.0
+            if col_neto_g or col_neto_ng:
+                neto_g  = normalizar_monto(row.get(col_neto_g, 0))  if col_neto_g  else 0
+                neto_ng = normalizar_monto(row.get(col_neto_ng, 0)) if col_neto_ng else 0
+                exentas = normalizar_monto(row.get(col_exentas, 0)) if col_exentas else 0
+                monto = neto_g + neto_ng + exentas
+                # Si todo dio 0 (NC sin neto discriminado), usar total como fallback
+                if monto == 0 and monto_total != 0:
+                    monto = monto_total
+            elif col_iva and col_total:
+                iva = normalizar_monto(row.get(col_iva, 0))
+                monto = monto_total - iva
+            else:
+                monto = monto_total
+
+            monto_usd = _convertir_a_usd(monto, moneda, tc_val, fecha, tc_map)
 
             # Signo por tipo
             if tipo == "NC":
