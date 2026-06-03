@@ -222,10 +222,10 @@ export default function Paso2({ expediente }: Props) {
                       <tr>
                         <th className="table-header text-left min-w-[200px]">Producto</th>
                         <th className="table-header text-center w-20">Syngenta</th>
+                        <th className="table-header text-right w-24">Total USD</th>
                         {MESES_FULL.map((m) => (
                           <th key={m} className="table-header text-right w-20">{m.slice(0, 3)}</th>
                         ))}
-                        <th className="table-header text-right w-24">Total USD</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -235,12 +235,12 @@ export default function Paso2({ expediente }: Props) {
                           <td className="table-cell text-center">
                             {row.syngenta === 'SI' ? <span className="badge-ok">SÍ</span> : <span className="text-oag-muted text-xs">—</span>}
                           </td>
+                          <td className="table-cell text-right font-mono font-semibold">{formatUSD(row.Total)}</td>
                           {MESES_FULL.map((m) => (
                             <td key={m} className="table-cell text-right font-mono">
                               {row[m] ? formatUSD(row[m]).replace('USD', '').trim() : '—'}
                             </td>
                           ))}
-                          <td className="table-cell text-right font-mono font-semibold">{formatUSD(row.Total)}</td>
                         </tr>
                       ))}
                     </tbody>

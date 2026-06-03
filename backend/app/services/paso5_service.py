@@ -243,7 +243,8 @@ def _hoja_tabla_apertura(wb: Workbook, tabla: List[Dict]):
 
     _titulo_hoja(ws, "ANEXO II — VENTA DE AGROQUÍMICOS", "Facturación neta en USD por producto y mes")
 
-    headers = ["Producto", "Syngenta"] + MESES + ["TOTAL USD"]
+    # Orden: Producto | Syngenta | TOTAL USD | Enero..Diciembre
+    headers = ["Producto", "Syngenta", "TOTAL USD"] + MESES
     _estilo_header(ws, 4, headers)
 
     for i, row in enumerate(tabla):
@@ -265,22 +266,23 @@ def _hoja_tabla_apertura(wb: Workbook, tabla: List[Dict]):
         cell_syn.fill = fill
         cell_syn.alignment = Alignment(horizontal="center")
 
-        for m_idx, mes in enumerate(MESES):
-            val = row.get(mes, 0)
-            c = ws.cell(row=r, column=3 + m_idx, value=val if val else None)
-            c.number_format = '#,##0.00'
-            c.font = Font(name="Calibri", size=9)
-            c.fill = fill
-
         total = row.get("Total", 0)
-        c_total = ws.cell(row=r, column=15, value=total)
+        c_total = ws.cell(row=r, column=3, value=total)
         c_total.number_format = '#,##0.00'
         c_total.font = Font(name="Calibri", size=9, bold=True)
         c_total.fill = fill
 
+        for m_idx, mes in enumerate(MESES):
+            val = row.get(mes, 0)
+            c = ws.cell(row=r, column=4 + m_idx, value=val if val else None)
+            c.number_format = '#,##0.00'
+            c.font = Font(name="Calibri", size=9)
+            c.fill = fill
+
     ws.column_dimensions["A"].width = 45
     ws.column_dimensions["B"].width = 10
-    for col in range(3, 16):
+    ws.column_dimensions["C"].width = 14   # TOTAL USD
+    for col in range(4, 16):
         ws.column_dimensions[get_column_letter(col)].width = 13
 
 

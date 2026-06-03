@@ -95,8 +95,8 @@ def _hoja_tabla_apertura_con_glosario(wb, tabla: List[Dict]):
     _titulo_hoja(ws, "ANEXO II — VENTA DE AGROQUÍMICOS",
                  "Facturación neta en USD por producto y mes — con glosario estandarizado")
 
-    # Headers con columna extra
-    headers = ["Producto", "Nombre Glosario", "Syngenta"] + MESES + ["TOTAL USD"]
+    # Orden: Producto | Nombre Glosario | Syngenta | TOTAL USD | Enero..Diciembre
+    headers = ["Producto", "Nombre Glosario", "Syngenta", "TOTAL USD"] + MESES
     _estilo_header(ws, 4, headers)
 
     for i, row in enumerate(tabla):
@@ -117,21 +117,22 @@ def _hoja_tabla_apertura_con_glosario(wb, tabla: List[Dict]):
         syn_cell.font = Font(name="Calibri", size=9, bold=es_syngenta,
                              color="1A4A8A" if es_syngenta else "333333")
 
-        for m_idx, mes in enumerate(MESES):
-            val = row.get(mes, 0)
-            c = ws.cell(row=r, column=4 + m_idx, value=val if val else None)
-            c.number_format = '#,##0.00'
-            c.fill = fill
-            c.font = Font(name="Calibri", size=9)
-
         total = row.get("Total", 0)
-        c_total = ws.cell(row=r, column=16, value=total)
+        c_total = ws.cell(row=r, column=4, value=total)
         c_total.number_format = '#,##0.00'
         c_total.font = Font(name="Calibri", size=9, bold=True)
         c_total.fill = fill
 
+        for m_idx, mes in enumerate(MESES):
+            val = row.get(mes, 0)
+            c = ws.cell(row=r, column=5 + m_idx, value=val if val else None)
+            c.number_format = '#,##0.00'
+            c.fill = fill
+            c.font = Font(name="Calibri", size=9)
+
     ws.column_dimensions["A"].width = 38
     ws.column_dimensions["B"].width = 35
     ws.column_dimensions["C"].width = 10
-    for col in range(4, 17):
+    ws.column_dimensions["D"].width = 14    # TOTAL USD
+    for col in range(5, 17):
         ws.column_dimensions[get_column_letter(col)].width = 13
