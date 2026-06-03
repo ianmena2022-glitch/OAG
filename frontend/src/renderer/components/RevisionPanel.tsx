@@ -48,7 +48,6 @@ export default function RevisionPanel({ expedienteId, paso, onApplied }: Props) 
   }
 
   const handleAnalizar = async () => {
-    if (!file) return
     setAnalizando(true)
     setResultado(null)
     try {
@@ -124,43 +123,55 @@ export default function RevisionPanel({ expedienteId, paso, onApplied }: Props) 
             <div className="flex-1 overflow-y-auto p-5">
               {!resultado && (
                 <>
-                  <p className="text-xs text-oag-muted mb-3 leading-relaxed">
-                    Subí el archivo del <strong>auditor humano</strong> (la versión que
-                    considerás correcta para este paso). Opus va a comparar contra el output
-                    actual de OGSA y los archivos de entrada que usaste, y va a diagnosticar
-                    automáticamente las divergencias significativas — sin que tengas que
-                    describir nada.
-                  </p>
-
-                  <div
-                    {...getRootProps()}
-                    className={cn(
-                      'border-2 border-dashed rounded p-6 text-center cursor-pointer transition-colors',
-                      isDragActive ? 'border-purple-500 bg-purple-50' :
-                      file ? 'border-green-400 bg-green-50' :
-                      'border-oag-border bg-oag-light hover:border-purple-300'
-                    )}
-                  >
-                    <input {...getInputProps()} />
-                    <Upload size={20} className={cn(
-                      'mx-auto mb-2',
-                      file ? 'text-green-600' : 'text-oag-muted'
-                    )} />
-                    {file ? (
-                      <p className="text-xs font-medium text-green-800">
-                        ✓ {file.name} ({(file.size/1024).toFixed(0)} KB)
-                      </p>
-                    ) : (
-                      <p className="text-xs text-oag-muted">
-                        Arrastrá el archivo del auditor o hacé click para seleccionar (.xlsx / .xls)
-                      </p>
-                    )}
+                  <div className="bg-purple-50/60 border border-purple-200 rounded p-3 mb-4">
+                    <p className="text-xs text-oag-text leading-relaxed">
+                      <strong className="text-purple-900">Auto-diagnóstico:</strong> Opus va a
+                      revisar los inputs del paso (gestión, ARCA, CRM, etc.) contra el output
+                      que generó el sistema. Detecta automáticamente inconsistencias internas:
+                      ratios sospechosos, montos absurdos, clasificaciones mal hechas, columnas
+                      mal mapeadas. <em>No necesita archivo de referencia.</em>
+                    </p>
                   </div>
 
-                  <div className="mt-4 text-xs text-oag-muted bg-yellow-50/60 border border-yellow-200 rounded p-3">
-                    <strong className="text-oag-text">⚠ Costo aproximado:</strong> $0.50 – $2 USD por análisis
-                    (modelo Opus 4.5 con razonamiento extendido). Reservalo para casos donde
-                    encuentres una divergencia importante con el auditor.
+                  <details className="mb-4">
+                    <summary className="text-xs text-oag-muted cursor-pointer hover:text-oag-text">
+                      ¿Tenés un archivo de auditoría hecho a mano? Subilo (opcional)
+                    </summary>
+                    <div className="mt-2">
+                      <div
+                        {...getRootProps()}
+                        className={cn(
+                          'border-2 border-dashed rounded p-4 text-center cursor-pointer transition-colors',
+                          isDragActive ? 'border-purple-500 bg-purple-50' :
+                          file ? 'border-green-400 bg-green-50' :
+                          'border-oag-border bg-oag-light hover:border-purple-300'
+                        )}
+                      >
+                        <input {...getInputProps()} />
+                        <Upload size={16} className={cn(
+                          'mx-auto mb-1',
+                          file ? 'text-green-600' : 'text-oag-muted'
+                        )} />
+                        {file ? (
+                          <p className="text-xs font-medium text-green-800">
+                            ✓ {file.name}
+                            <button
+                              className="ml-2 text-red-700 underline"
+                              onClick={(e) => { e.stopPropagation(); setFile(null) }}
+                            >quitar</button>
+                          </p>
+                        ) : (
+                          <p className="text-xs text-oag-muted">
+                            Archivo del auditor humano (.xlsx / .xls) — opcional
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </details>
+
+                  <div className="text-xs text-oag-muted bg-yellow-50/60 border border-yellow-200 rounded p-3">
+                    <strong className="text-oag-text">⚠ Costo:</strong> $0.50 – $2 USD por análisis
+                    (Opus 4.5 con razonamiento extendido). Tarda 30-60 seg.
                   </div>
                 </>
               )}
@@ -213,6 +224,18 @@ export default function RevisionPanel({ expedienteId, paso, onApplied }: Props) 
                       <div className="text-xs bg-white border border-oag-border rounded p-3 whitespace-pre-wrap leading-relaxed">
                         {resultado.analisis}
                       </div>
+                    </div>
+                  )}
+
+                  {/* Checks realizados */}
+                  {Array.isArray(resultado.checks_realizados) && resultado.checks_realizados.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-semibold text-oag-text mb-1">Verificaciones que hizo Opus</h3>
+                      <ul className="text-xs bg-white border border-oag-border rounded p-3 space-y-0.5">
+                        {resultado.checks_realizados.map((c: string, i: number) => (
+                          <li key={i} className="text-oag-muted">✓ {c}</li>
+                        ))}
+                      </ul>
                     </div>
                   )}
 
@@ -290,7 +313,7 @@ export default function RevisionPanel({ expedienteId, paso, onApplied }: Props) 
                   <button className="btn-secondary" onClick={handleClose}>Cancelar</button>
                   <button
                     className="btn-primary flex items-center gap-1.5"
-                    disabled={!file || analizando}
+                    disabled={analizando}
                     onClick={handleAnalizar}
                   >
                     <Sparkles size={12} /> Analizar con Opus

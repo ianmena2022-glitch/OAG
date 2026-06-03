@@ -142,9 +142,9 @@ export const adminAPI = {
 // ── Revisión con IA (Opus) ───────────────────────────────────────────────────
 
 export const revisionAPI = {
-  revisar: (expId: number | string, paso: number, archivo: File) => {
+  revisar: (expId: number | string, paso: number, archivo?: File | null) => {
     const form = new FormData()
-    form.append('archivo_referencia', archivo)
+    if (archivo) form.append('archivo_referencia', archivo)
     // 5 minutos: Opus con thinking puede tardar
     return api.post(`/api/expedientes/${expId}/pasos/${paso}/revisar`, form, {
       timeout: 300_000,

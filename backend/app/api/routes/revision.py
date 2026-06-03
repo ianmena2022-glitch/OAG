@@ -108,28 +108,56 @@ def _contexto_paso(exp_id: int, paso: int, db: Session) -> dict:
 
 
 SYSTEM_OPUS_REVISION = """Eres un experto en auditoría comercial agropecuaria \
-argentina y depuración de software. Tu rol es diagnosticar bugs cuando un \
-auditor humano detecta divergencias entre el output de un sistema (OGSA) y \
-su propio archivo de referencia.
+argentina y depuración de software. Tu rol es AUTO-DIAGNOSTICAR el output \
+de un sistema (OGSA) que procesa archivos de gestión/ARCA/CRM contra \
+sus propios inputs, buscando inconsistencias internas que indiquen bugs.
+
+NO hay archivo de referencia humano. Tenés que detectar problemas SOLO \
+comparando: inputs vs output del sistema + sentido común del dominio.
 
 Tenés acceso a:
   - El output actual de OGSA para un paso N específico
-  - El archivo de referencia del auditor (la versión que él considera correcta)
-  - Una muestra de los archivos de entrada que OGSA usó
+  - Una muestra de los archivos de entrada que OGSA usó (primeras filas)
   - El diagnóstico del parser (qué columnas mapeó)
   - Aprendizajes previos del sistema (correcciones aplicadas antes)
+  - Opcional: un archivo de referencia del auditor si lo subió (poco común)
 
-Tu tarea: compará sistemáticamente y diagnosticá el problema. Identificá:
-  1. QUÉ está mal exactamente (con ejemplos numéricos concretos)
-  2. POR QUÉ está mal (causa raíz — moneda, conversión, clasificación, etc.)
-  3. CÓMO arreglarlo en este expediente
-  4. CÓMO evitar que vuelva a pasar (aprendizaje universal)
+Patrones típicos de bugs que tenés que detectar:
 
-IMPORTANTE: Sé honesto sobre tu nivel de certeza. Si no estás seguro, decilo.
+A) MONEDA/CONVERSIÓN
+  - Total USD del sistema ≫ Total esperado del dominio (ej. gestión = USD 2.598
+    MIL millones cuando ARCA dice USD 3M → diff 770x = típico bug "olvidé
+    dividir por TC")
+  - Ratio output/input cercano a 1000-1500 = TC peso/USD argentino no aplicado
+  - Ratio cercano a 1.21 = IVA argentino no descontado
+  - Misma columna leída como USD cuando en realidad está en ARS
 
-Respondé ÚNICAMENTE un JSON válido con esta estructura:
+B) CLASIFICACIÓN
+  - Productos obviamente Syngenta clasificados NO
+  - Productos obviamente NO Syngenta (semillas, fertilizantes genéricos) clasificados SI
+  - Productos no-agroquímicos (combustibles, servicios, fletes) en tabla de
+    agroquímicos
+
+C) PARSER/MAPPING
+  - Columna crítica no detectada (ver parser_diagnostico)
+  - Confianza < 0.7 en mapeos
+  - "TIPO" cuando debería ser "TIPO_CAMBIO" o viceversa
+  - Filas filtradas que no deberían (totales bajos sin razón)
+
+D) NÚMEROS ABSURDOS
+  - Montos negativos donde deberían ser positivos (NC mal interpretadas)
+  - Cantidades enormes (ej. cantidad de 1000L en una fila individual)
+  - Fechas fuera del año de análisis no filtradas
+
+Tu tarea:
+  1. Hacé checks numéricos cruzados (suma input vs output, ratios, etc.)
+  2. Detectá los 1-3 problemas MÁS GRAVES (no menciones nimiedades)
+  3. Para cada uno: causa raíz + fix concreto + aprendizaje universal
+  4. Sé honesto sobre confianza. Si no encontrás nada raro, decilo claro.
+
+Respondé ÚNICAMENTE un JSON válido:
 {
-  "analisis": "descripción detallada del bug con ejemplos concretos (montos, comprobantes específicos)",
+  "analisis": "descripción detallada del/los bugs con ejemplos concretos (montos, comprobantes específicos)",
   "causa_raiz": "explicación técnica de por qué pasa",
   "confianza": 0.0-1.0,
   "fix_inmediato": {
@@ -139,18 +167,22 @@ Respondé ÚNICAMENTE un JSON válido con esta estructura:
       // Si tipo=edicion_filas: lista de {subtipo, indice_o_key, campo, valor_actual, valor_nuevo}
       // Si tipo=re_ejecucion_con_override: {regla: ..., justificacion: ...}
     ]
-  },
+  } o null si no hay fix evidente,
   "aprendizaje": {
     "titulo": "frase corta (<80 chars) que describa el patrón",
     "descripcion": "explicación completa del patrón para futuras ejecuciones",
     "regla_estructurada": null o {"cuando": {...}, "entonces": {...}},
     "aplica_a": "general" | "erp_especifico" | "expediente_unico"
-  }
+  } o null,
+  "checks_realizados": [
+    "lista breve de las verificaciones que hiciste, ej: 'sum gestión USD vs ARCA USD', 'ratio promedio por comprobante', 'productos clasificados SI sin marca conocida'"
+  ]
 }
 
-Si NO encontrás un bug claro, devolvé:
-{"analisis": "...", "causa_raiz": "no se detectó bug", "confianza": 0.0,
- "fix_inmediato": null, "aprendizaje": null}
+Si TODO se ve consistente:
+{"analisis": "No se detectaron inconsistencias significativas. Los números cierran, los ratios son razonables, no hay banderas rojas.",
+ "causa_raiz": "—", "confianza": 0.9, "fix_inmediato": null, "aprendizaje": null,
+ "checks_realizados": [...]}
 """
 
 
@@ -158,60 +190,75 @@ Si NO encontrás un bug claro, devolvé:
 def revisar_con_ia(
     exp_id: int,
     paso: int,
-    archivo_referencia: UploadFile = File(...),
+    archivo_referencia: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Llama a Opus para que diagnostique el bug en el paso N."""
+    """
+    Llama a Opus para auto-diagnosticar el output del paso N comparando
+    contra los inputs originales y aplicando sentido común del dominio.
+
+    El archivo de referencia del auditor es OPCIONAL — solo se usa si ya
+    existe una auditoría previa manual. Para auditorías nuevas (caso
+    típico), Opus detecta inconsistencias internas: ratios sospechosos,
+    montos absurdos, clasificaciones obvias mal hechas, mappings de
+    columnas mal detectados.
+    """
     exp = db.query(Expediente).filter(Expediente.id == exp_id).first()
     if not exp:
         raise HTTPException(404, "Expediente no encontrado")
     if paso not in PASO_INPUTS:
         raise HTTPException(400, f"Paso {paso} no soportado")
 
-    # Guardar archivo de referencia temporalmente y leer muestra
-    content = archivo_referencia.file.read()
-    fd, tmp_path = tempfile.mkstemp(suffix=os.path.splitext(archivo_referencia.filename)[1] or ".xlsx")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(content)
-        muestra_ref = _muestra_excel(tmp_path, max_rows=50)
-        muestra_ref["nombre_original"] = archivo_referencia.filename
+    muestra_ref = None
+    tmp_path = None
+    if archivo_referencia is not None and archivo_referencia.filename:
+        content = archivo_referencia.file.read()
+        if content:
+            fd, tmp_path = tempfile.mkstemp(
+                suffix=os.path.splitext(archivo_referencia.filename)[1] or ".xlsx"
+            )
+            with os.fdopen(fd, "wb") as f:
+                f.write(content)
+            muestra_ref = _muestra_excel(tmp_path, max_rows=50)
+            muestra_ref["nombre_original"] = archivo_referencia.filename
 
-        # Recopilar contexto
+    try:
         ctx = _contexto_paso(exp_id, paso, db)
 
-        # Armar prompt
         user_msg = (
             f"Expediente: {exp.nombre_distribuidor} (CUIT {exp.cuit_distribuidor}), "
             f"año {exp.anio_analisis}\n"
             f"Paso a revisar: {paso}\n\n"
-            f"=== ARCHIVO DE REFERENCIA DEL AUDITOR ===\n"
-            f"{json.dumps(muestra_ref, ensure_ascii=False, indent=2)[:8000]}\n\n"
-            f"=== OUTPUT ACTUAL OGSA ===\n"
-            f"{json.dumps(ctx['output_ogsa'], ensure_ascii=False, indent=2, default=str)[:20000]}\n\n"
-            f"=== MUESTRA DE INPUTS USADOS POR OGSA ===\n"
-            f"{json.dumps(ctx['inputs_muestra'], ensure_ascii=False, indent=2)[:10000]}\n\n"
+            f"=== OUTPUT ACTUAL OGSA (este es el resultado que el sistema produjo) ===\n"
+            f"{json.dumps(ctx['output_ogsa'], ensure_ascii=False, indent=2, default=str)[:22000]}\n\n"
+            f"=== MUESTRA DE INPUTS QUE USÓ OGSA (primeras filas de cada archivo) ===\n"
+            f"{json.dumps(ctx['inputs_muestra'], ensure_ascii=False, indent=2)[:12000]}\n\n"
         )
+        if muestra_ref is not None:
+            user_msg += (
+                f"=== ARCHIVO DE REFERENCIA OPCIONAL DEL AUDITOR ===\n"
+                f"{json.dumps(muestra_ref, ensure_ascii=False, indent=2)[:8000]}\n\n"
+            )
         if ctx["aprendizajes_previos"]:
             user_msg += (
-                f"=== APRENDIZAJES PREVIOS DEL SISTEMA (para este paso) ===\n"
+                f"=== APRENDIZAJES PREVIOS DEL SISTEMA (correcciones aplicadas antes) ===\n"
                 f"{json.dumps(ctx['aprendizajes_previos'], ensure_ascii=False, indent=2)[:3000]}\n\n"
             )
         user_msg += (
-            "Compará el OUTPUT OGSA contra el ARCHIVO DE REFERENCIA del auditor. "
-            "Identificá divergencias significativas. Diagnosticá el bug, proponé "
-            "fix inmediato + aprendizaje universal. Respondé en JSON válido."
+            "AUTO-DIAGNOSTICÁ el output del sistema. Hacé checks numéricos "
+            "cruzados entre input y output. Aplicá sentido común del dominio "
+            "(escala razonable de montos, ratios típicos, clasificaciones "
+            "obvias). Detectá inconsistencias. Si encontrás bugs, proponé fix "
+            "inmediato + aprendizaje universal. Respondé en JSON válido."
         )
 
-        # Llamada a Opus
         try:
             resp = chat_opus(SYSTEM_OPUS_REVISION, user_msg,
                               max_tokens=16384, thinking_budget=8000)
         except Exception as e:
             raise HTTPException(500, f"Error llamando a Opus: {type(e).__name__}: {e}")
 
-        # Parsear respuesta JSON (limpiar markdown fences si los hay)
         text = resp["text"].strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[1] if "\n" in text else text
@@ -234,13 +281,15 @@ def revisar_con_ia(
             "input_tokens": resp["input_tokens"],
             "output_tokens": resp["output_tokens"],
             "costo_usd": resp["costo_usd_estimado"],
+            "uso_referencia": muestra_ref is not None,
         }
         return parsed
     finally:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 @router.post("/{exp_id}/pasos/{paso}/aplicar-fix")
