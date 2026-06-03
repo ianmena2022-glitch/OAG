@@ -1,0 +1,14 @@
+feat(paso4+5): ABRIR siempre con FC/ND/NC y Total al principio
+
+Anexo I (Compras):
+- Proveedores marcados "ABRIR" ahora generan SIEMPRE las tres filas
+  (FC, ND, NC), incluso si un tipo no tuvo movimientos (queda en $0).
+  Tanto si el proveedor tuvo compras como si no.
+- Las tres filas FC/ND/NC quedan agrupadas juntas (orden FC -> ND -> NC),
+  no se mezclan con otros proveedores por el ordenamiento.
+- Columna "Total USD" reubicada: ahora va entre CUIT y Enero, no al final
+  (Excel del Anexo I y tabla UI del Paso 4).
+
+Bump v1.5.14.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>

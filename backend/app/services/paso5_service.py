@@ -202,7 +202,8 @@ def _hoja_resumen_compras(wb: Workbook, resumen: List[Dict]):
 
     _titulo_hoja(ws, "ANEXO I — RESUMEN DE COMPRAS", "Compras por proveedor — Top 90% del total (en USD)")
 
-    headers = ["Proveedor", "CUIT"] + MESES + ["TOTAL USD"]
+    # Orden: Proveedor | CUIT | TOTAL USD | Enero..Diciembre
+    headers = ["Proveedor", "CUIT", "TOTAL USD"] + MESES
     _estilo_header(ws, 4, headers)
 
     for i, row in enumerate(resumen):
@@ -210,27 +211,29 @@ def _hoja_resumen_compras(wb: Workbook, resumen: List[Dict]):
         zebra = i % 2 == 0
         _estilo_celda(ws, r, 1, row.get("nombre_proveedor", ""), zebra)
         _estilo_celda(ws, r, 2, row.get("cuit_proveedor", ""), zebra)
-        for m_idx, mes in enumerate(MESES):
-            val = row.get(mes, 0)
-            cell = _estilo_celda(ws, r, 3 + m_idx, val if val else None, zebra, '#,##0.00')
         total = row.get("Total", 0)
-        c = _estilo_celda(ws, r, 15, total, zebra, '#,##0.00', bold=True)
+        c = _estilo_celda(ws, r, 3, total, zebra, '#,##0.00', bold=True)
         if total < 0:
             c.font = Font(name="Calibri", size=9, bold=True, color="C0392B")
+        for m_idx, mes in enumerate(MESES):
+            val = row.get(mes, 0)
+            _estilo_celda(ws, r, 4 + m_idx, val if val else None, zebra, '#,##0.00')
 
     # Totalizadora
     total_row = len(resumen) + 5
     ws.cell(row=total_row, column=1, value="TOTAL").font = Font(bold=True, name="Calibri", size=10)
+    gran_total = sum(r.get("Total", 0) for r in resumen)
+    ws.cell(row=total_row, column=3, value=round(gran_total, 2)).number_format = '#,##0.00'
+    ws.cell(row=total_row, column=3).font = Font(bold=True, name="Calibri", size=10)
     for m_idx in range(12):
         col_vals = [r.get(MESES[m_idx], 0) for r in resumen]
-        ws.cell(row=total_row, column=3 + m_idx, value=round(sum(col_vals), 2)).number_format = '#,##0.00'
-    gran_total = sum(r.get("Total", 0) for r in resumen)
-    ws.cell(row=total_row, column=15, value=round(gran_total, 2)).number_format = '#,##0.00'
+        ws.cell(row=total_row, column=4 + m_idx, value=round(sum(col_vals), 2)).number_format = '#,##0.00'
 
     # Anchos de columna
     ws.column_dimensions["A"].width = 40
     ws.column_dimensions["B"].width = 16
-    for col in range(3, 16):
+    ws.column_dimensions["C"].width = 14   # TOTAL USD
+    for col in range(4, 16):
         ws.column_dimensions[get_column_letter(col)].width = 13
 
 

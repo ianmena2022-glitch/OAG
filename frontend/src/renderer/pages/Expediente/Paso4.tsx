@@ -131,10 +131,10 @@ export default function Paso4({ expediente }: Props) {
                   <tr>
                     <th className="table-header text-left min-w-[220px]">Proveedor</th>
                     <th className="table-header text-center w-28">CUIT</th>
+                    <th className="table-header text-right w-24">Total USD</th>
                     {MESES_FULL.map((m) => (
                       <th key={m} className="table-header text-right w-20">{m.slice(0, 3)}</th>
                     ))}
-                    <th className="table-header text-right w-24">Total USD</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -142,12 +142,12 @@ export default function Paso4({ expediente }: Props) {
                     <tr key={i} className={i % 2 === 0 ? 'bg-white hover:bg-blue-50/20' : 'bg-oag-zebra hover:bg-blue-50/20'}>
                       <td className="table-cell font-medium">{row.nombre_proveedor}</td>
                       <td className="table-cell text-center text-oag-muted">{row.cuit_proveedor}</td>
+                      <td className="table-cell text-right font-mono font-bold">{formatUSD(row.Total)}</td>
                       {MESES_FULL.map((m) => (
                         <td key={m} className="table-cell text-right font-mono">
                           {row[m] ? formatUSD(row[m]).replace('USD ', '') : '—'}
                         </td>
                       ))}
-                      <td className="table-cell text-right font-mono font-bold">{formatUSD(row.Total)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -324,14 +324,16 @@ def _generar_resumen_compras(df: pd.DataFrame, proveedores_config: dict) -> List
             categoria = _categoria(cuit, prov)
 
             if categoria == "ABRIR":
-                # Una fila por FC/ND/NC. Si un tipo no tiene movimientos se
-                # omite (no llenamos con ceros: si no hay NCs, no hay fila NC).
+                # Una fila por FC/ND/NC SIEMPRE — incluso si un tipo no tiene
+                # movimientos (queda en $0). El auditor pidió ver las tres
+                # categorías para todos los proveedores ABRIR.
                 for tipo in ["FC", "ND", "NC"]:
                     df_tipo = df_prov[df_prov["tipo_comprobante"] == tipo]
                     if df_tipo.empty:
-                        continue
-                    row = _construir_fila_mensual(df_tipo, f"{prov} — {tipo}", cuit)
-                    row["categoria"] = "ABRIR"
+                        row = _fila_vacia(f"{prov} — {tipo}", cuit, "ABRIR")
+                    else:
+                        row = _construir_fila_mensual(df_tipo, f"{prov} — {tipo}", cuit)
+                        row["categoria"] = "ABRIR"
                     result.append(row)
             elif categoria == "INCLUIR":
                 row = _construir_fila_mensual(df_prov, prov, cuit)
@@ -358,7 +360,12 @@ def _generar_resumen_compras(df: pd.DataFrame, proveedores_config: dict) -> List
         if not cuit_n and nombre and nombre in nombres_procesados:
             continue
         nombre_show = nombre or f"(CUIT {cuit_n})"
-        result.append(_fila_vacia(nombre_show, cuit_n, accion))
+        if accion == "ABRIR":
+            # Tres filas FC/ND/NC en $0
+            for tipo in ["FC", "ND", "NC"]:
+                result.append(_fila_vacia(f"{nombre_show} — {tipo}", cuit_n, "ABRIR"))
+        else:
+            result.append(_fila_vacia(nombre_show, cuit_n, accion))
         if cuit_n:
             cuits_procesados.add(cuit_n)
         if nombre:
@@ -369,9 +376,42 @@ def _generar_resumen_compras(df: pd.DataFrame, proveedores_config: dict) -> List
         print(f"[Paso 4] {sin_compras_count} proveedor(es) del archivo sin "
               f"compras en los recibidos → aparecen con $0 en el resumen")
 
-    # Ordenar por total descendente (los con $0 quedan al final naturalmente)
-    result.sort(key=lambda x: abs(x.get("Total", 0)), reverse=True)
-    return result
+    # Ordenar por total descendente, MANTENIENDO juntas las filas FC/ND/NC
+    # de un mismo proveedor ABRIR. La clave de grupo es el CUIT (si existe) o
+    # el nombre base (sin "— FC/ND/NC"). El total del grupo es la suma de los
+    # totales absolutos de sus filas. Dentro del grupo se mantiene FC → ND → NC.
+    def _base_nombre(n: str) -> str:
+        s = str(n or "")
+        for suf in (" — FC", " — ND", " — NC"):
+            if s.endswith(suf):
+                return s[: -len(suf)]
+        return s
+
+    def _grupo_key(r: dict) -> str:
+        c = str(r.get("cuit_proveedor") or "").strip()
+        return c if c else _base_nombre(r.get("nombre_proveedor", ""))
+
+    def _orden_tipo(r: dict) -> int:
+        n = str(r.get("nombre_proveedor") or "")
+        if n.endswith(" — FC"): return 0
+        if n.endswith(" — ND"): return 1
+        if n.endswith(" — NC"): return 2
+        return 0
+
+    grupos: Dict[str, List[Dict]] = {}
+    for r in result:
+        grupos.setdefault(_grupo_key(r), []).append(r)
+
+    grupos_ordenados = sorted(
+        grupos.items(),
+        key=lambda kv: sum(abs(r.get("Total", 0)) for r in kv[1]),
+        reverse=True,
+    )
+    result_ordenado: List[Dict] = []
+    for _, filas in grupos_ordenados:
+        filas.sort(key=_orden_tipo)
+        result_ordenado.extend(filas)
+    return result_ordenado
 
 
 def _fila_vacia(nombre: str, cuit: str, categoria: str) -> Dict:
