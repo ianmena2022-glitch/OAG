@@ -1037,8 +1037,29 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
                     moneda = str(row.get(col_moneda, "ARS")).upper().strip() or "ARS"
                 else:
                     moneda = moneda_global or "ARS"
-                # tc_row=0 fuerza a _convertir_a_usd a usar el mapa del usuario
-                monto_usd = _convertir_a_usd(monto_original, moneda, 0, fecha, tc_map)
+
+                # ── Detección de "moneda de operación" vs "moneda del monto" ──
+                # Algunos ERP (ej Germinare) exportan SIEMPRE en pesos, pero la
+                # columna Moneda indica la moneda en la que se NOMINÓ el
+                # comprobante ("Dólar" / "Peso"). En esos casos, aunque la
+                # moneda diga "Dólar", el monto ESTÁ en pesos y hay que dividir
+                # por la cotización del comprobante (no tratarlo como USD).
+                #
+                # Heurística: moneda="Dólar/USD" + cotización del archivo > 1
+                # → es ARS, dividir por la cotización del comprobante (más
+                #   precisa que el TC del maestro porque es la del día exacto).
+                # Sin cotización del archivo (o ≤1) → es USD real.
+                tc_row = normalizar_monto(row.get(col_tc)) if col_tc else 0
+                moneda_dice_usd = moneda in (
+                    "USD", "U$S", "DOLAR", "DÓLAR", "DOL", "$U", "USD$",
+                )
+                if moneda_dice_usd and tc_row > 1:
+                    # Monto en ARS, convertir con la cotización del comprobante
+                    monto_usd = monto_original / tc_row
+                else:
+                    # Caso normal: tc_row=0 fuerza a _convertir_a_usd a usar
+                    # el maestro del usuario.
+                    monto_usd = _convertir_a_usd(monto_original, moneda, 0, fecha, tc_map)
 
             elif col_total_usd:
                 monto_usd_erp = normalizar_monto(row.get(col_total_usd))
