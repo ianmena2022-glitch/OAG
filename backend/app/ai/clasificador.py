@@ -76,16 +76,43 @@ SYSTEM_SYNGENTA = """Eres un experto en la cartera comercial de Syngenta Argenti
 Todos los productos que recibís YA son agroquímicos. Tu única tarea es decidir
 si pertenecen a la cartera de Syngenta.
 
-Productos conocidos de Syngenta (entre muchos otros): Actara, Ampligo, Amistar,
-Azimut, Callisto, Curzate, Dual Gold, Elatus, Engeo, Flint, Force, Gramoxone,
-Header, Herculex, Karate, Lannate, Laudis, Lumax, Maxim, NK Seeds, Priori,
-Quadris, Revus, Ridomil, Sencor, Sequence, Switch, Tazer, Touchdown, Trophy,
-Tilt, Vertimec, Voliam, Bontima, CruiserMaxx, Denim, Endura, Expert,
-Folicur (cuando es Syngenta), y todos sus genéricos, formulaciones y mezclas.
+Marcas y productos de Syngenta (lista no exhaustiva — incluye históricas y
+modernas que actualmente comercializa Syngenta Argentina):
 
-Principios activos exclusivos o asociados históricamente a Syngenta:
-azoxystrobin + cyproconazol (Amistar Top), tiametoxam (Actara/Engeo),
-clorantraniliprol (Altacor/Coragen), lambda-cihalotrina (Karate).
+Herbicidas: Gramoxone, Touchdown (Sulfosato Touchdown), Dual Gold, Callisto,
+Lumax, Camix, Halex GT, Axial, Axial Plus, Acuron (Acuron Uno), Boxer,
+Reflex, Sequence, Peak, Lambolt, Nuvoxl, Traspect, Voleris, Spirit,
+Pack Gold, Trophy, Adengo.
+
+Fungicidas: Amistar, Amistar Top, Priori, Priori Xtra, Quadris, Tilt,
+Bravo, Cherokee, Score, Daconil, Folicur (cuando es Syngenta), Elatus,
+Elatus Ace, Mazen, Mazen Ace, Miravis, Miravis Duo, Miravis Top,
+Miravis Neo, Vibrance, Vibrance Gold, Vibrance Integral, Vesdua,
+Vesdua P, Helios, Helios Max, Artea, Bontima, Revus.
+
+Insecticidas: Actara, Engeo, Engeo Pleno, Karate, Karate Zeon, Ampligo,
+Voliam, Voliam Flexi, Voliam Targo, Force, Match, Polo, Plenum, Curyom,
+Goten, Proclaim, Demand, Atabron, Lannate (cuando Syngenta).
+
+Curasemillas (seed treatments): Maxim, Maxim XL, Maxim Quattro, Maxim Evolution,
+CruiserMaxx, Cruiser, Vibrance Gold, Vibrance Integral, Apron, Apron XL,
+Apron Maxx, Dividend, Force CS.
+
+Bioestimulantes y nutricionales (Valagro, adquirida por Syngenta en 2020):
+Megafol, Viva, Sweet, Maxifruit, Brexil, Erger, Kendal, YieldOn,
+Talete, Kiem, Top Set, Sumitec.
+
+Otros: Rainbow (cuando es Syngenta), Heliosulf, Inscalis.
+
+Principios activos asociados a Syngenta: azoxystrobin (Amistar), benzovindiflupyr
+(Elatus), pydiflumetofen (Miravis), mefentrifluconazol, isofetamida, fluindapyr,
+tiametoxam (Actara/Engeo), lambda-cihalotrina (Karate), clorantraniliprol +
+abamectina (Voliam Targo), mesotrione (Callisto), pinoxaden (Axial),
+S-metolaclor (Dual Gold), bicyclopirona + s-metolaclor + atrazina (Acuron).
+
+Regla práctica: Si el nombre contiene una de las marcas listadas como
+subcadena (case-insensitive), es Syngenta. Ej: "AXIAL PLUS 4X5 L ARA" → SI.
+"VIBRANCE GOLD 1000L ARA" → SI. "VOLERIS X 20 LTS" → SI.
 
 Responde ÚNICAMENTE un JSON array. Para cada producto:
 [

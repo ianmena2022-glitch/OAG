@@ -134,20 +134,31 @@ def ejecutar_paso2(
 def _productos_syngenta_por_marca(productos_unicos: list, maestro: list,
                                   clasificaciones_ia: list) -> set:
     """
-    Decide qué productos de la gestión son Syngenta usando el MAESTRO Syngenta
-    como ground truth (substring match de marca, mismo criterio que Paso 3
-    contra el CRM). La IA queda solo como fallback cuando no hay maestro.
+    Decide qué productos de la gestión son Syngenta combinando dos señales:
 
-    Estrategia:
-      - Extraer las marcas únicas del maestro (primera palabra significativa
-        + el nombre completo).
-      - Marcar producto como Syngenta si su nombre contiene alguna marca del
-        maestro.
-      - Si el maestro está vacío → fallback a la clasificación IA.
+      A) MAESTRO (ground truth determinístico): substring match de marca
+         contra el maestro Syngenta cargado. Mismo criterio que Paso 3 contra
+         el CRM.
+      B) IA (cobertura de productos no incluidos en el maestro): la IA tiene
+         conocimiento del portfolio Syngenta más allá del maestro cargado, y
+         puede reconocer productos como NUVOXL, TRASPECT, VOLERIS, VIBRANCE,
+         MIRAVIS, MEGAFOL, RAINBOW, etc., aunque el admin no haya subido un
+         maestro 100% completo.
+
+    Estrategia: UNIÓN de las dos señales — un producto es Syngenta si A o B
+    lo marca. Esto evita que productos Syngenta válidos queden afuera por un
+    maestro incompleto (que era el bug histórico).
+
+    Si el maestro está vacío, solo se usa la IA.
     """
-    if not maestro:
-        return {c["producto"] for c in clasificaciones_ia if c.get("syngenta") == "SI"}
+    # Señal B: IA dice Syngenta
+    desde_ia = {c["producto"] for c in (clasificaciones_ia or [])
+                if c.get("syngenta") == "SI"}
 
+    if not maestro:
+        return desde_ia
+
+    # Señal A: maestro matching por marca
     marcas = set()
     for nombre in maestro:
         if not nombre:
@@ -162,17 +173,20 @@ def _productos_syngenta_por_marca(productos_unicos: list, maestro: list,
     GENERICAS = {"PRODUCTO", "ARTICULO", "ITEM", "DESC", "VARIOS", "OTROS"}
     marcas -= GENERICAS
 
-    if not marcas:
-        return {c["producto"] for c in clasificaciones_ia if c.get("syngenta") == "SI"}
+    desde_maestro = set()
+    if marcas:
+        for prod in productos_unicos:
+            if not prod:
+                continue
+            p_upper = str(prod).upper()
+            if any(m in p_upper for m in marcas):
+                desde_maestro.add(prod)
 
-    resultado = set()
-    for prod in productos_unicos:
-        if not prod:
-            continue
-        p_upper = str(prod).upper()
-        if any(m in p_upper for m in marcas):
-            resultado.add(prod)
-    return resultado
+    union = desde_maestro | desde_ia
+    print(f"[Paso 2] Syngenta: maestro={len(desde_maestro)} + ia={len(desde_ia)} = "
+          f"union {len(union)} productos. Solo IA aportó: "
+          f"{len(desde_ia - desde_maestro)} adicionales.")
+    return union
 
 
 def _guardas_paso2(df: pd.DataFrame, totales: dict) -> list:
