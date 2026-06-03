@@ -136,6 +136,50 @@ class TipoCambioMaestro(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class AprendizajeIA(Base):
+    """
+    Aprendizajes del sistema generados por el botón "Revisar con IA".
+
+    Cuando el auditor encuentra un bug en algún paso, sube su archivo
+    de referencia (la versión correcta) y Opus compara contra el output
+    OGSA + los inputs originales para diagnosticar. Si el auditor aprueba
+    la propuesta de fix, se aplica al expediente Y se guarda acá.
+
+    Próximas ejecuciones de pasos pueden leer estos aprendizajes y:
+      - Pasarlos como contexto adicional a las llamadas de IA
+        (clasificador, smart_parser) para que la IA "aprenda" sin
+        cambiar código.
+      - Aplicar reglas estructuradas determinísticamente cuando son
+        codificables (ej. conversión de moneda).
+
+    No reemplaza fixes de código — es complementario y reversible
+    (se puede desactivar borrando o marcando activo=False).
+    """
+    __tablename__ = "aprendizajes_ia"
+
+    id = Column(Integer, primary_key=True, index=True)
+    paso = Column(Integer, nullable=False, index=True)
+    titulo = Column(String(300), nullable=False)
+    descripcion = Column(String(3000), nullable=False)
+    causa_raiz = Column(String(2000), nullable=True)
+    # Fix aplicado al expediente origen (qué cambió). Puede ser:
+    #   {"tipo": "edicion_filas", "cambios": [...]}
+    #   {"tipo": "re_ejecucion_override", "override": {...}}
+    fix_aplicado = Column(JSON, nullable=True)
+    # Regla estructurada universal (cuándo aplica, qué hacer). Puede ser
+    # None si el aprendizaje es solo descriptivo (texto para la IA).
+    # Ejemplo:
+    #   {"cuando": {"moneda_in": ["DOLAR"], "tc_archivo_gt": 1},
+    #    "entonces": {"dividir_monto_por": "tc_archivo"}}
+    regla_estructurada = Column(JSON, nullable=True)
+    expediente_origen_id = Column(Integer, ForeignKey("expedientes.id", ondelete="SET NULL"),
+                                   nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    confianza_ia = Column(Float, nullable=True)        # 0..1, lo que dijo Opus
+    activo = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class LogEvento(Base):
     """
     Log estructurado por expediente. Captura qué pasó en cada paso

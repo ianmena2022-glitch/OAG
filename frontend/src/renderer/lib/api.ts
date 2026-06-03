@@ -137,3 +137,21 @@ export const adminAPI = {
   },
   obtenerTiposCambio: () => api.get('/api/admin/tipos-cambio'),
 }
+
+
+// ── Revisión con IA (Opus) ───────────────────────────────────────────────────
+
+export const revisionAPI = {
+  revisar: (expId: number | string, paso: number, archivo: File) => {
+    const form = new FormData()
+    form.append('archivo_referencia', archivo)
+    // 5 minutos: Opus con thinking puede tardar
+    return api.post(`/api/expedientes/${expId}/pasos/${paso}/revisar`, form, {
+      timeout: 300_000,
+    })
+  },
+  aplicarFix: (expId: number | string, paso: number, payload: any) =>
+    api.post(`/api/expedientes/${expId}/pasos/${paso}/aplicar-fix`, payload),
+  listarAprendizajes: () => api.get('/api/expedientes/aprendizajes'),
+  toggleAprendizaje: (id: number) => api.put(`/api/expedientes/aprendizajes/${id}/toggle`),
+}

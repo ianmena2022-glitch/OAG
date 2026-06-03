@@ -179,7 +179,7 @@ def _clasificar_agroquimicos(productos: List[str], batch_size: int = 50) -> List
 
 
 def _clasificar_syngenta(productos_agro: List[str], maestro_syngenta: List[str] = None,
-                         batch_size: int = 50) -> Dict[str, Dict]:
+                         batch_size: int = 50, aprendizajes_texto: str = "") -> Dict[str, Dict]:
     """
     Etapa 2: para los productos ya marcados como agroquímico, decide si son Syngenta.
     Devuelve un dict {producto: {syngenta, justificacion}} para fácil mezcla.
@@ -195,12 +195,19 @@ def _clasificar_syngenta(productos_agro: List[str], maestro_syngenta: List[str] 
             f"{json.dumps(sample, ensure_ascii=False)}"
         )
 
+    aprendizajes_ctx = ""
+    if aprendizajes_texto:
+        aprendizajes_ctx = (
+            f"\n\nAprendizajes previos (correcciones aplicadas en otros expedientes — "
+            f"tenelos en cuenta):\n{aprendizajes_texto}"
+        )
+
     mapa: Dict[str, Dict] = {}
     for i in range(0, len(productos_agro), batch_size):
         batch = productos_agro[i: i + batch_size]
         user_msg = (
             f"Decidí si cada uno pertenece a la cartera de Syngenta "
-            f"({len(batch)} productos):{maestro_context}\n\n"
+            f"({len(batch)} productos):{maestro_context}{aprendizajes_ctx}\n\n"
             f"{json.dumps(batch, ensure_ascii=False)}"
         )
         try:
@@ -227,7 +234,8 @@ def _clasificar_syngenta(productos_agro: List[str], maestro_syngenta: List[str] 
 
 # ─── Orquestador público (firma sin cambios para no romper paso2_service) ──────
 
-def clasificar_productos(productos: List[str], maestro_syngenta: List[str] = None) -> List[Dict]:
+def clasificar_productos(productos: List[str], maestro_syngenta: List[str] = None,
+                         aprendizajes_texto: str = "") -> List[Dict]:
     """
     Clasifica una lista de productos en dos etapas:
       1. agroquímico SI/NO sobre TODOS los productos
@@ -247,7 +255,8 @@ def clasificar_productos(productos: List[str], maestro_syngenta: List[str] = Non
 
     # Etapa 2: solo para los SI
     productos_agro = [r["producto"] for r in etapa1 if r.get("agroquimico") == "SI"]
-    mapa_syngenta = _clasificar_syngenta(productos_agro, maestro_syngenta)
+    mapa_syngenta = _clasificar_syngenta(productos_agro, maestro_syngenta,
+                                          aprendizajes_texto=aprendizajes_texto)
 
     # Mezclar y devolver con la estructura clásica
     resultados: List[Dict] = []

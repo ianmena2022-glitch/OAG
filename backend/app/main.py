@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from .core.config import settings
 from .core.database import engine, Base
 from .models import user, expediente  # noqa: F401 — importar para crear tablas
-from .api.routes import auth, expedientes, admin, pasos, logs
+from .api.routes import auth, expedientes, admin, pasos, logs, revision
 
 # Crear tablas
 Base.metadata.create_all(bind=engine)
@@ -67,6 +67,7 @@ app.include_router(expedientes.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(pasos.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
+app.include_router(revision.router, prefix="/api")
 
 
 GITHUB_RELEASE_URL = (

@@ -435,6 +435,7 @@ def ejecutar_paso2(
             clientes_especiales,
             exp_id,
             exp.anio_analisis,
+            db=db,
         )
     except Exception as e:
         _log_paso_error(db, exp_id, current_user.id, 2, _t0, e, traceback.format_exc())

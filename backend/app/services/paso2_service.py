@@ -23,9 +23,15 @@ def ejecutar_paso2(
     clientes_especiales: List[str],
     expediente_id: int,
     anio_analisis: int,
+    db=None,
 ) -> dict:
     """
     Ejecuta todos los sub-reportes del Paso 2.
+
+    Si se pasa `db`, lee los aprendizajes activos del paso 2 (generados con
+    el botón "Revisar con IA") y los inyecta como contexto en la
+    clasificación de IA — el sistema "aprende" de correcciones previas
+    sin tocar código.
     """
     df = pd.read_excel(path_bajada_norm)
     df = _preparar_df(df, anio_analisis)
@@ -53,9 +59,20 @@ def ejecutar_paso2(
     # 3. Muestreo
     muestreo = _generar_muestreo(df, ranking_clientes, ranking_productos, clientes_especiales)
 
-    # 4. Clasificación con IA
+    # 4. Clasificación con IA — pasarle aprendizajes previos como contexto
     productos_unicos = df["articulo"].dropna().unique().tolist()
-    clasificaciones = clasificar_productos(productos_unicos, maestro_syngenta)
+    aprendizajes_texto = ""
+    if db is not None:
+        from ..models.expediente import AprendizajeIA
+        items = db.query(AprendizajeIA).filter(
+            AprendizajeIA.paso == 2, AprendizajeIA.activo == True
+        ).order_by(AprendizajeIA.created_at.desc()).limit(20).all()
+        if items:
+            lineas = [f"- {a.titulo}: {a.descripcion}" for a in items]
+            aprendizajes_texto = "\n".join(lineas)
+            print(f"[Paso 2] Inyectando {len(items)} aprendizajes al clasificador IA")
+    clasificaciones = clasificar_productos(productos_unicos, maestro_syngenta,
+                                            aprendizajes_texto=aprendizajes_texto)
     clasificacion_map = {c["producto"]: c for c in clasificaciones}
 
     # 6. Filtros

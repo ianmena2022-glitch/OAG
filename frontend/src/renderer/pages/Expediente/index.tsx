@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { expedientesAPI, pasosAPI } from '../../lib/api'
 import { useAuthStore, isAdminRole, canSeeLogs, useNotificationStore } from '../../store'
 import { cn, PASO_LABELS, downloadBlob } from '../../lib/utils'
@@ -13,6 +13,7 @@ import Paso5 from './Paso5'
 import Paso6 from './Paso6'
 import ColaboradoresPanel from '../../components/ColaboradoresPanel'
 import LogsPanel from '../../components/LogsPanel'
+import RevisionPanel from '../../components/RevisionPanel'
 
 const PASO_COMPONENTS: Record<number, React.ComponentType<{ expediente: any }>> = {
   1: Paso1,
@@ -31,6 +32,7 @@ const ESTADO_COLORS: Record<string, string> = {
 
 export default function ExpedientePage() {
   const { id } = useParams<{ id: string }>()
+  const qc = useQueryClient()
   const [pasoActivo, setPasoActivo] = useState(1)
   const [colabOpen, setColabOpen] = useState(false)
   const [logsOpen, setLogsOpen] = useState(false)
@@ -122,6 +124,15 @@ export default function ExpedientePage() {
             {exportando ? <Loader size={12} className="animate-spin" /> : <Download size={12} />}
             Descargar paso {pasoActivo}
           </button>
+          {expediente.pasos_completados?.includes(pasoActivo) && (
+            <div className="mt-2">
+              <RevisionPanel
+                expedienteId={id!}
+                paso={pasoActivo}
+                onApplied={() => qc.invalidateQueries({ queryKey: ['expediente', String(id)] })}
+              />
+            </div>
+          )}
         </div>
 
         <div className="card overflow-hidden">
