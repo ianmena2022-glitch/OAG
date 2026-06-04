@@ -24,11 +24,15 @@ def file_hash(path: str) -> str:
     return h.hexdigest()
 
 
-def cache_key(task: str, file_path: str, extra: str = "") -> str:
-    """Genera clave de cache para (tarea, archivo, parámetros extra)."""
+def cache_key(task: str, file_path: str, *extras: str) -> str:
+    """
+    Genera clave de cache para (tarea, archivo, parámetros extra).
+    Cualquier cambio en `extras` (schema, exclusiones, etc.) invalida el cache.
+    """
     fh = file_hash(file_path)
-    if extra:
-        extra_h = hashlib.sha256(extra.encode("utf-8")).hexdigest()[:12]
+    extra_combined = "|".join(e for e in extras if e) if extras else ""
+    if extra_combined:
+        extra_h = hashlib.sha256(extra_combined.encode("utf-8")).hexdigest()[:12]
         return f"{task}_{fh[:16]}_{extra_h}"
     return f"{task}_{fh[:16]}"
 

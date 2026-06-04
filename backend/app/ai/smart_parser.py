@@ -324,8 +324,14 @@ def parsear_excel(
         "warnings": [str]
       }
     """
-    # 1. Cache lookup
-    cache_k = cache.cache_key(task_id, path, json.dumps(schema, sort_keys=True))
+    # 1. Cache lookup — el key incluye schema Y excluir_si_contiene, así
+    # cambios en cualquiera de los dos invalidan el cache automáticamente
+    # (importante para no propagar mappings viejos cuando se ajustan reglas).
+    cache_k = cache.cache_key(
+        task_id, path,
+        json.dumps(schema, sort_keys=True),
+        json.dumps(excluir_si_contiene or {}, sort_keys=True),
+    )
     if use_cache:
         cached = cache.get(cache_k)
         if cached:
