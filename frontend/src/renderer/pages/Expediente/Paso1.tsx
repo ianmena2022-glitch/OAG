@@ -18,6 +18,8 @@ const ESTADO_COLORS: Record<string, string> = {
   SOLO_ARCA: 'text-red-700 bg-red-50',
   SOLO_GESTION: 'text-orange-700 bg-orange-50',
   MANUAL: 'text-blue-700 bg-blue-50',
+  // NC/ND con PV=0: movimientos internos del ERP, no van a ARCA por diseño.
+  INTERNO: 'text-slate-700 bg-slate-100',
 }
 
 function formatSize(bytes?: number) {
@@ -347,7 +349,7 @@ export default function Paso1({ expediente }: Props) {
               </p>
             </div>
           )}
-          <div className="grid grid-cols-6 gap-3">
+          <div className="grid grid-cols-7 gap-3">
             {[
               { label: 'Total ARCA', value: resumen.total_arca, color: '' },
               { label: 'Total Gestión', value: resumen.total_gestion, color: '' },
@@ -355,8 +357,10 @@ export default function Paso1({ expediente }: Props) {
               { label: 'Diferencias', value: resumen.con_diferencia, color: resumen.con_diferencia > 0 ? 'text-yellow-700' : 'text-green-700' },
               { label: 'Solo ARCA', value: resumen.solo_arca, color: resumen.solo_arca > 0 ? 'text-red-700' : '' },
               { label: 'Solo Gestión', value: resumen.solo_gestion, color: resumen.solo_gestion > 0 ? 'text-red-700 font-extrabold' : '' },
-            ].map((s, i) => (
-              <div key={i} className="card p-3">
+              { label: 'Internos*', value: resumen.interno ?? 0, color: 'text-slate-700',
+                title: 'NC/ND con PV=0: movimientos internos del ERP (auto-anulaciones, traslados). No van a ARCA.' },
+            ].map((s: any, i) => (
+              <div key={i} className="card p-3" title={s.title || undefined}>
                 <p className="text-xs text-oag-muted">{s.label}</p>
                 <p className={cn('text-xl font-bold mt-0.5', s.color || 'text-oag-text')}>{s.value}</p>
               </div>
@@ -398,7 +402,8 @@ export default function Paso1({ expediente }: Props) {
                 row.estado === 'DIFERENCIA' ? 'bg-yellow-50/60' :
                 row.estado === 'SOLO_ARCA' ? 'bg-red-50/40' :
                 row.estado === 'SOLO_GESTION' ? 'bg-orange-50/40' :
-                row.estado === 'MANUAL' ? 'bg-blue-50/40' : ''
+                row.estado === 'MANUAL' ? 'bg-blue-50/40' :
+                row.estado === 'INTERNO' ? 'bg-slate-50/60' : ''
               }
             />
           </div>

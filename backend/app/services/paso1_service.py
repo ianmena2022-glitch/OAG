@@ -756,6 +756,9 @@ def ejecutar_paso1(
     solo_gestion = [r for r in conciliacion if r["estado"] == "SOLO_GESTION"]
     diferencia = [r for r in conciliacion if r["estado"] == "DIFERENCIA"]
     ok = [r for r in conciliacion if r["estado"] == "OK"]
+    # INTERNO: NC/ND con PV=0, movimientos internos del ERP (auto-anulaciones,
+    # traslados entre cuentas). No se facturan a ARCA, no son errores.
+    interno = [r for r in conciliacion if r["estado"] == "INTERNO"]
 
     resumen = {
         "total_arca": len(registros_arca),
@@ -765,6 +768,7 @@ def ejecutar_paso1(
         "ok": len(ok),
         "solo_arca": len(solo_arca),
         "solo_gestion": len(solo_gestion),
+        "interno": len(interno),
         "con_diferencia": len(diferencia),
         "monto_total_arca_usd": sum(r["monto_usd_arca"] for r in registros_arca),
         "monto_total_gestion_usd": sum(r["monto_usd"] for r in registros_gestion),
@@ -1352,6 +1356,14 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
     for r_gest in gestion:
         if id(r_gest) not in gestion_usados:
             monto = r_gest["monto_usd"]
+            # NC/ND con PV=0 son movimientos INTERNOS del ERP (auto-anulaciones,
+            # traslados entre cuentas, ajustes contables). NO se facturan a ARCA
+            # por definición, así que no debieran considerarse "errores SOLO_GESTION".
+            # Se etiquetan como INTERNO para que el auditor los identifique.
+            numero = r_gest.get("numero", "") or ""
+            pv_es_cero = numero.startswith("00000-") or numero.startswith("0-")
+            es_nota = r_gest["tipo"] in ("NC", "ND")
+            estado = "INTERNO" if (pv_es_cero and es_nota) else "SOLO_GESTION"
             conciliacion.append({
                 "key": r_gest["key"],
                 "tipo": r_gest["tipo"],
@@ -1361,7 +1373,7 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
                 "monto_usd_arca": 0.0,
                 "monto_usd_gestion": monto,
                 "diferencia_usd": round(-monto, 2),  # arca - gestion = 0 - gestion
-                "estado": "SOLO_GESTION",
+                "estado": estado,
             })
 
     conciliacion.sort(key=lambda x: x["fecha"])
