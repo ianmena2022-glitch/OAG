@@ -137,6 +137,38 @@ _CODIGOS_AFIP = frozenset([
 ])
 
 
+def _es_numero(v: str) -> bool:
+    """¿Parsea como número? — robusto a formatos ARG ($, 1.234,56, etc.)"""
+    s = str(v).strip().replace("$", "").replace(" ", "")
+    if not s or s.lower() in ("nan", "none", "null", "-"):
+        return False
+    # Quitar separadores típicos
+    s2 = s.replace(".", "").replace(",", ".")
+    try:
+        float(s2)
+        return True
+    except (ValueError, TypeError):
+        pass
+    # Intentar con punto como decimal
+    s3 = s.replace(",", "")
+    try:
+        float(s3)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _es_fecha(v: str) -> bool:
+    s = str(v).strip()
+    if not s or s.lower() in ("nan", "none", "null"):
+        return False
+    try:
+        dt = pd.to_datetime(s, errors="coerce", dayfirst=True)
+        return not pd.isna(dt)
+    except Exception:
+        return False
+
+
 def _verificar_contenido_mapping(df: pd.DataFrame, mapping: dict) -> list:
     """
     Valida semánticamente que las columnas mapeadas contengan el tipo de dato
@@ -144,28 +176,79 @@ def _verificar_contenido_mapping(df: pd.DataFrame, mapping: dict) -> list:
 
     Retorna lista de campos cuyo mapeo es sospechoso (deben re-detectarse con IA).
 
-    Checks actuales
-    ───────────────
-    numero_comprobante
-        Si ≥ 80 % de la muestra son códigos de tipo AFIP (1-213) con poca
-        variedad (≤ 10 valores únicos) → la columna es probablemente
-        "Tipo de Comprobante" mal asignada (ocurre cuando el nombre de
-        "Número Desde" tiene encoding roto y no matchea keywords).
+    Checks
+    ──────
+    - numero_comprobante: ≥80% deben ser códigos AFIP (1-213) con ≤10 únicos
+      indica que es "Tipo de Comprobante" mal asignado por encoding roto.
+
+    - articulo: ≥80% de muestra deben ser texto NO puramente numérico.
+      Si la columna mapeada tiene 80% de valores que son solo números,
+      probablemente se eligió "Código de Artículo" en vez de la descripción.
+
+    - monto_total / monto_neto / monto_total_usd: ≥80% deben ser numéricos.
+
+    - fecha / fecha_imputacion: ≥80% deben parsear como datetime.
+
+    - cuit_cliente / cuit_proveedor: ≥80% deben tener 8-13 dígitos
+      (CUIT/DNI). Si son nombres de cliente, está mal mapeada.
+
+    - tipo_comprobante: pocos valores únicos (≤50). Si son muchos, está
+      mapeada a un campo de detalle.
     """
     sospechosos = []
+    SAMPLE_N = 40
 
-    col = mapping.get("numero_comprobante")
-    if col and col in df.columns:
-        muestra = (
-            df[col].dropna().head(30).astype(str).str.strip().tolist()
-        )
-        muestra = [v for v in muestra if v and v.lower() not in ("nan", "none", "")]
-        if muestra:
-            n_codigos = sum(1 for v in muestra if v in _CODIGOS_AFIP)
-            n_unicos  = len(set(muestra))
-            # Condición doble: mayoría de valores son códigos AFIP + poca diversidad
-            if n_codigos / len(muestra) >= 0.8 and n_unicos <= 10:
-                sospechosos.append("numero_comprobante")
+    def _muestra(col):
+        if not col or col not in df.columns:
+            return None
+        m = df[col].dropna().head(SAMPLE_N).astype(str).str.strip().tolist()
+        return [v for v in m if v and v.lower() not in ("nan", "none", "")]
+
+    def _pct(it, pred):
+        if not it:
+            return 0.0
+        return sum(1 for v in it if pred(v)) / len(it)
+
+    # ── numero_comprobante: códigos AFIP en lugar del número ─────────────
+    m = _muestra(mapping.get("numero_comprobante"))
+    if m:
+        n_codigos = sum(1 for v in m if v in _CODIGOS_AFIP)
+        if n_codigos / len(m) >= 0.8 and len(set(m)) <= 10:
+            sospechosos.append("numero_comprobante")
+
+    # ── articulo: NO debe ser puramente numérico ─────────────────────────
+    # Detecta el bug "Código de Artículo" — columna numérica en vez de
+    # descripción del producto.
+    m = _muestra(mapping.get("articulo"))
+    if m and _pct(m, _es_numero) >= 0.8:
+        sospechosos.append("articulo")
+
+    # ── montos: deben ser numéricos ──────────────────────────────────────
+    for campo in ("monto_total", "monto_neto", "monto_total_usd",
+                  "monto_neto_gravado", "monto_iva", "cotizacion"):
+        m = _muestra(mapping.get(campo))
+        if m and _pct(m, _es_numero) < 0.8:
+            sospechosos.append(campo)
+
+    # ── fecha: debe parsear ──────────────────────────────────────────────
+    m = _muestra(mapping.get("fecha"))
+    if m and _pct(m, _es_fecha) < 0.8:
+        sospechosos.append("fecha")
+
+    # ── CUIT: 8-13 dígitos ───────────────────────────────────────────────
+    for campo in ("cuit_cliente", "cuit_proveedor"):
+        m = _muestra(mapping.get(campo))
+        if m:
+            def _es_cuit_like(v):
+                digits = "".join(c for c in str(v) if c.isdigit())
+                return 8 <= len(digits) <= 13
+            if _pct(m, _es_cuit_like) < 0.7:
+                sospechosos.append(campo)
+
+    # ── tipo_comprobante: pocos valores únicos ───────────────────────────
+    m = _muestra(mapping.get("tipo_comprobante"))
+    if m and len(set(m)) > 50:
+        sospechosos.append("tipo_comprobante")
 
     return sospechosos
 

@@ -118,14 +118,124 @@ def _safe_validar(db, exp_id: int, paso: int, build_validacion):
 
     Llamarse SIEMPRE después de _marcar_paso_completado para que el paso quede
     marcado como hecho aunque la validación falle.
+
+    Agrega automáticamente cross-step consistency checks (Capa 2).
     """
     try:
-        validacion = build_validacion()
+        validacion = build_validacion() or {}
+        # ── Cross-step checks ──────────────────────────────────────────
+        try:
+            extras = _cross_step_checks(db, exp_id, paso)
+            if extras:
+                validacion = dict(validacion or {})
+                alertas = list(validacion.get("alertas") or [])
+                alertas.extend(extras)
+                validacion["alertas"] = alertas
+                # Si hay alguna alerta crítica, elevar la severidad global
+                if any(a.get("nivel") == "error" for a in extras):
+                    validacion["severidad"] = "error"
+                elif any(a.get("nivel") == "warning" for a in extras) \
+                        and validacion.get("severidad") in (None, "info"):
+                    validacion["severidad"] = "warning"
+        except Exception as e:
+            print(f"[PASO {paso}] cross-step checks fallaron (no bloquea): {e}")
+
         _save_resultado(db, exp_id, paso, "validacion", datos=validacion)
         return validacion
     except Exception as e:
         print(f"[PASO {paso}] Validación falló — el paso queda igualmente completado. Error: {e}")
         return {"ok": True, "severidad": "info", "alertas": []}
+
+
+def _get_resumen_paso(db: Session, exp_id: int, paso: int) -> dict:
+    """Lee el subtipo 'resumen' o 'totales' del paso indicado. {} si no existe."""
+    sub = "resumen" if paso == 1 else "totales"
+    rp = db.query(ResultadoPaso).filter(
+        ResultadoPaso.expediente_id == exp_id,
+        ResultadoPaso.paso == paso,
+        ResultadoPaso.subtipo == sub,
+    ).first()
+    if rp and isinstance(rp.datos, dict):
+        return rp.datos
+    return {}
+
+
+def _cross_step_checks(db: Session, exp_id: int, paso: int) -> list[dict]:
+    """
+    Capa 2 — Checks de consistencia cruzada entre pasos.
+
+    Compara totales del paso recién ejecutado contra pasos previos.
+    Si hay desvíos significativos, devuelve alertas como warning (no bloquea).
+
+    Formato de alerta: {nivel, titulo, mensaje}
+      nivel: 'warning' | 'error' | 'info'
+    """
+    alertas: list[dict] = []
+
+    def _ratio_check(a: float, b: float, tol_pct: float, titulo: str, ctx: str):
+        """Si a/b se aparta más de tol_pct (ej. 0.05 = 5%) → warning."""
+        if not a or not b:
+            return
+        ratio = a / b
+        diff_pct = abs(ratio - 1) * 100
+        if diff_pct > tol_pct * 100:
+            alertas.append({
+                "nivel": "warning",
+                "titulo": titulo,
+                "mensaje": (f"{ctx}: ratio {ratio:.3f} (diferencia {diff_pct:.1f}%, "
+                            f"tolerancia {tol_pct*100:.0f}%). "
+                            f"Valores: {a:,.0f} vs {b:,.0f}."),
+            })
+
+    # ── Paso 2 vs Paso 1 ──────────────────────────────────────────────
+    if paso == 2:
+        r1 = _get_resumen_paso(db, exp_id, 1)
+        r2 = _get_resumen_paso(db, exp_id, 2)
+        t1_gestion = r1.get("monto_total_gestion_usd")
+        t2_facturado = r2.get("total_facturado_usd")
+        _ratio_check(
+            t2_facturado, t1_gestion, 0.05,
+            "Paso 2 vs Paso 1: total facturado",
+            "Paso 2.total_facturado vs Paso 1.total_gestion",
+        )
+
+    # ── Paso 3 vs Paso 2 ──────────────────────────────────────────────
+    if paso == 3:
+        r2 = _get_resumen_paso(db, exp_id, 2)
+        r3 = _get_resumen_paso(db, exp_id, 3)
+        t2_syngenta = r2.get("total_syngenta_usd")
+        # Paso 3 puede tener varios totales — buscar el de gestion matched
+        t3_gestion = r3.get("monto_gestion_total_usd") or r3.get("monto_g_total") \
+                       or r3.get("total_gestion_usd")
+        if t2_syngenta and t3_gestion:
+            _ratio_check(
+                t3_gestion, t2_syngenta, 0.10,
+                "Paso 3 vs Paso 2: monto Syngenta",
+                "Paso 3.gestion vs Paso 2.total_syngenta",
+            )
+
+    # ── Paso 4: sanity check de escala vs ARCA (compras vs ventas) ────
+    if paso == 4:
+        r1 = _get_resumen_paso(db, exp_id, 1)
+        r4 = _get_resumen_paso(db, exp_id, 4)
+        t1_arca = r1.get("monto_total_arca_usd")
+        t4_compras = r4.get("total_compras_usd")
+        if t1_arca and t4_compras:
+            ratio = t4_compras / t1_arca
+            # Las compras suelen ser 70-95% de las ventas del distribuidor.
+            # Fuera de [0.3, 1.5] es sospechoso (compras 30% < ventas o 50% >).
+            if ratio < 0.3 or ratio > 1.5:
+                alertas.append({
+                    "nivel": "warning",
+                    "titulo": "Paso 4: escala de compras sospechosa vs ventas",
+                    "mensaje": (
+                        f"Compras (USD {t4_compras:,.0f}) representan {ratio*100:.0f}% "
+                        f"de las ventas (USD {t1_arca:,.0f}). Fuera del rango típico "
+                        f"30-150%. Verificar conversión de moneda y filtros."
+                    ),
+                })
+
+    return alertas
 
 
 # ── PASO 1 ────────────────────────────────────────────────────────────────────
