@@ -330,11 +330,17 @@ GESTION_EXCLUSIONES = {
     # fecha del comprobante, no de vencimiento
     "fecha": ["vencimiento", "vto", "venc", "pago", "cobro"],
     # articulo NO debe confundirse con cliente, CUIT, número de comprobante, fechas, montos
+    # NI con "Código de Artículo" (que tiene un número, no la descripción).
+    # Si el ERP exporta tanto "Código de Artículo" como "Detalle/Categoría",
+    # queremos elegir la descripción, no el código.
     "articulo": [
         "cliente", "razon", "receptor", "comprador",
         "cuit", "cuil", "nro", "numero", "número", "comprobante",
         "tipo", "fecha", "moneda", "total", "importe", "monto",
         "subtotal", "iva", "impuesto",
+        # Excluir columnas de código de artículo (numéricas) — preferimos
+        # siempre la descripción/nombre del producto.
+        "código", "codigo", "cod ", "cod.",
     ],
 }
 
