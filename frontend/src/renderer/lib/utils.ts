@@ -31,10 +31,16 @@ export function formatPercent(value: number | null | undefined): string {
 export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
   try {
-    const d = new Date(dateStr + 'T00:00:00')
+    // Si ya es ISO con hora ("2026-06-03T14:00:00"), parsear directo.
+    // Si es solo fecha ("2026-06-03"), agregar T00:00:00 para evitar
+    // que JS lo interprete como UTC y reste un día por timezone.
+    const s = String(dateStr)
+    const hasTime = s.includes('T')
+    const d = new Date(hasTime ? s : s + 'T00:00:00')
+    if (isNaN(d.getTime())) return s
     return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' })
   } catch {
-    return dateStr
+    return String(dateStr)
   }
 }
 
