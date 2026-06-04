@@ -304,6 +304,14 @@ GESTION_SCHEMA = {
         "cantidad", "cant.", "cant", "qty", "unidades", "vol",
         "volumen", "kilos", "kg", "litros", "lts",
     ],
+    # Comprobante asociado: ERPs argentinos rellenan esto en NC/ND que ajustan
+    # una FC original. Si la NC/ND no está en ARCA PERO el comprobante asociado
+    # sí, es muy probable que sea un movimiento interno (no se reporta a ARCA).
+    "comprobante_asociado": [
+        "comprobante asociado", "comprob. asociado", "comp asociado",
+        "comp. asociado", "fc asociada", "factura asociada",
+        "asociado", "comprobante origen", "comp origen",
+    ],
 }
 
 GESTION_EXCLUSIONES = {
@@ -945,6 +953,7 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
     col_total_usd = mapping.get("monto_total_usd")  # columna explícita en USD
     col_articulo  = mapping.get("articulo")
     col_cantidad  = mapping.get("cantidad")
+    col_comp_asoc = mapping.get("comprobante_asociado")
 
     # Reportes agrupados por producto ("Producto: X" como cabecera de grupo):
     # reconstruir el artículo por línea con forward-fill y descartar las cabeceras.
@@ -1122,6 +1131,15 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
             ):
                 continue
 
+            # Normalizar comprobante_asociado al formato PV-NUM
+            comp_asoc_norm = ""
+            if col_comp_asoc:
+                ca_raw = str(row.get(col_comp_asoc, "") or "").strip()
+                if ca_raw and ca_raw.lower() != "nan":
+                    # Puede venir como "00008-00000859" (ya normalizado) o
+                    # variantes "8-859" / "00008-859" / "859"
+                    comp_asoc_norm = normalizar_numero_comprobante(valor_combinado=ca_raw)
+
             registros.append({
                 "tipo": tipo,
                 "numero": numero,
@@ -1134,6 +1152,7 @@ def _procesar_gestion(df: pd.DataFrame, tc_map: dict, mapping: dict = None,
                 "moneda": moneda,
                 "monto_original": monto_original,
                 "monto_usd": round(monto_usd, 2),
+                "comprobante_asociado": comp_asoc_norm,
                 "key": f"{tipo}-{numero}",
             })
         except Exception:
@@ -1353,17 +1372,47 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
                 "estado": "SOLO_ARCA",
             })
 
+    # Índice ARCA por (PV, NUM) sin tipo — para detectar internos que
+    # comparten numero con un comprobante real en ARCA pero de otro tipo
+    arca_keys_pvnum = set()
+    arca_keys_full = set()    # "TIPO-PV-NUM" para chequear comprobante_asociado
+    for r in arca:
+        try:
+            pv_part, num_part = r["numero"].split("-", 1)
+            arca_keys_pvnum.add((pv_part, num_part))
+            arca_keys_full.add(r["numero"])
+        except ValueError:
+            continue
+
     for r_gest in gestion:
         if id(r_gest) not in gestion_usados:
             monto = r_gest["monto_usd"]
-            # NC/ND con PV=0 son movimientos INTERNOS del ERP (auto-anulaciones,
-            # traslados entre cuentas, ajustes contables). NO se facturan a ARCA
-            # por definición, así que no debieran considerarse "errores SOLO_GESTION".
-            # Se etiquetan como INTERNO para que el auditor los identifique.
+            # Lógica de clasificación INTERNO (NC/ND no encontradas en ARCA):
+            #   a) PV=0/00000  → movimiento interno por diseño del ERP
+            #   b) Mismo PV-NUM existe en ARCA con OTRO tipo → es probable
+            #      anulación contable interna (caso Germinare: el ERP reusa
+            #      el mismo PV-NUM para una NC interna que ajusta una ND ya
+            #      emitida)
+            #   c) Tiene comprobante_asociado y ese asociado SÍ está en ARCA
+            #      → es un ajuste financiero (interés/recargo) vinculado a
+            #      una FC presentada → no se reporta a ARCA por separado
             numero = r_gest.get("numero", "") or ""
-            pv_es_cero = numero.startswith("00000-") or numero.startswith("0-")
+            comp_asoc = r_gest.get("comprobante_asociado", "") or ""
             es_nota = r_gest["tipo"] in ("NC", "ND")
-            estado = "INTERNO" if (pv_es_cero and es_nota) else "SOLO_GESTION"
+
+            pv_es_cero = numero.startswith("00000-") or numero.startswith("0-")
+            comparte_pvnum = False
+            asociado_en_arca = False
+            try:
+                pv_part, num_part = numero.split("-", 1)
+                comparte_pvnum = (pv_part, num_part) in arca_keys_pvnum
+            except ValueError:
+                pass
+            if comp_asoc and comp_asoc in arca_keys_full:
+                asociado_en_arca = True
+
+            es_interno = es_nota and (pv_es_cero or comparte_pvnum or asociado_en_arca)
+            estado = "INTERNO" if es_interno else "SOLO_GESTION"
             conciliacion.append({
                 "key": r_gest["key"],
                 "tipo": r_gest["tipo"],
