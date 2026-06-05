@@ -291,13 +291,44 @@ def _filtrar_gestion_por_marcas_crm(df_gestion: pd.DataFrame, marcas: set) -> pd
     art_upper = df["articulo"].fillna("").astype(str).str.upper()
     es_nc_nd = df["tipo"].astype(str).isin(["NC", "ND"])
 
+    # NC/ND internas: las que quedaron sin artículo después del vaciado
+    # (es_articulo_no_producto los detectó) son ajustes contables que
+    # NO van al CRM. Excluirlas del cruce para no generar SOLO_GESTION
+    # falsos (caso Germinare: "DIFERENCIA DE COTIZACIÓN", "CAMBIO DE
+    # TITULAR POR ERROR DE SISTEMA", etc.).
+    # Regla: NC/ND con artículo vacío + (PV=0 o tiene comprobante_asociado)
+    # son internas. NC/ND con artículo real (producto Syngenta) se incluyen.
+    def _es_nota_interna(row):
+        if not es_nc_nd[row.name]:
+            return False
+        art = str(row.get("articulo", "") or "").strip()
+        if art:
+            return False  # tiene artículo real → no es interna
+        # Sin artículo: verificar si es interna por PV o comp_asociado
+        numero = str(row.get("numero", "") or "")
+        pv_cero = numero.startswith("00000-") or numero.startswith("0-")
+        comp_asoc = str(row.get("comprobante_asociado", "") or "").strip()
+        return pv_cero or bool(comp_asoc)
+
+    try:
+        es_nota_interna = df.apply(_es_nota_interna, axis=1)
+        n_internas = int(es_nota_interna.sum())
+        if n_internas:
+            print(f"[PASO 3] {n_internas} NC/ND internas excluidas del cruce "
+                  f"(ajustes contables sin artículo Syngenta: diferencias de "
+                  f"cotización, cambios de titular, etc.)")
+    except Exception:
+        es_nota_interna = pd.Series(False, index=df.index)
+
+    # NC/ND legítimas: tienen artículo Syngenta O no son internas
+    es_nc_nd_legitima = es_nc_nd & ~es_nota_interna
+
     if not marcas:
-        # Sin info de marcas → quedarse al menos con NC/ND
-        return df[es_nc_nd].copy()
+        return df[es_nc_nd_legitima].copy()
 
     # Match si CUALQUIER marca está contenida en el articulo
     matches = art_upper.apply(lambda s: any(b in s for b in marcas))
-    return df[matches | es_nc_nd].copy()
+    return df[matches | es_nc_nd_legitima].copy()
 
 
 def _numero_crm_a_estandar(valor: str) -> str:
