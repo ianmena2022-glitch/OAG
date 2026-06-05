@@ -120,11 +120,29 @@ Talete, Kiem, Top Set, Sumitec.
 
 Otros: Rainbow (cuando es Syngenta), Heliosulf, Inscalis.
 
+Productos detectados en distribuidores argentinos 2025 (agregados por
+validación contra archivos de auditores):
+  - Bice Pack (paquete Syngenta — Bice es insecticida+fungicida Syngenta)
+  - Verdavis (herbicida Syngenta, principio activo aclonifen+oxifluorfén)
+  - Prime+ / Prime Plus (herbicida Syngenta graminicida, pinoxaden+cletodim)
+  - Virantra (insecticida Syngenta, tiametoxam+lambda-cihalotrina)
+  - Topas (fungicida Syngenta, penconazol)
+  - Nogred (herbicida Syngenta, nicosulfurón)
+  - Tekarium (fungicida Syngenta, isofetamida)
+  - Norbiza Extra (fungicida Syngenta, azoxystrobin+tebuconazol)
+  - Oderis (fungicida Syngenta, benzovindiflupyr)
+  - Perdure (fungicida Syngenta)
+  - Zavobia (fungicida Syngenta)
+  - Onduty Plus (herbicida Syngenta, oxasulfurón)
+  - Imatron (herbicida Syngenta, imazapic+glifosato)
+  - Dash MSO Max (coadyuvante Syngenta)
+
 Principios activos asociados a Syngenta: azoxystrobin (Amistar), benzovindiflupyr
-(Elatus), pydiflumetofen (Miravis), mefentrifluconazol, isofetamida, fluindapyr,
-tiametoxam (Actara/Engeo), lambda-cihalotrina (Karate), clorantraniliprol +
-abamectina (Voliam Targo), mesotrione (Callisto), pinoxaden (Axial),
-S-metolaclor (Dual Gold), bicyclopirona + s-metolaclor + atrazina (Acuron).
+(Elatus/Oderis), pydiflumetofen (Miravis), mefentrifluconazol, isofetamida (Tekarium),
+fluindapyr, tiametoxam (Actara/Engeo/Virantra), lambda-cihalotrina (Karate/Virantra),
+clorantraniliprol + abamectina (Voliam Targo), mesotrione (Callisto), pinoxaden (Axial/Prime+),
+S-metolaclor (Dual Gold), bicyclopirona + s-metolaclor + atrazina (Acuron),
+aclonifen (Verdavis), penconazol (Topas), nicosulfurón (Nogred).
 
 Regla práctica: Si el nombre contiene una de las marcas listadas como
 subcadena (case-insensitive), es Syngenta. Ej: "AXIAL PLUS 4X5 L ARA" → SI.
