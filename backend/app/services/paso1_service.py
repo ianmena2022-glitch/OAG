@@ -630,7 +630,7 @@ def _deduplicar_gestion(registros: list) -> list:
 
 def _agregar_por_comprobante(registros: list) -> list:
     """
-    Agrupa registros de Gestión por clave (tipo+numero) y suma los montos.
+    Agrupa registros de Gestión por clave (tipo+numero+CUIT) y suma los montos.
 
     Necesario cuando el ERP exporta una fila por línea de producto en lugar
     de una por comprobante (caso típico en Tango, SAP B1, Dynamics, etc.).
@@ -643,14 +643,30 @@ def _agregar_por_comprobante(registros: list) -> list:
     Para NC los montos son negativos — se suman igual (se preserva el signo).
     Metadatos (fecha, cliente, cuit) se toman del primer registro del grupo;
     si el primero tiene cliente vacío se busca el primer no vacío.
+
+    IMPORTANTE: agrupamos también por CUIT_normalizado del cliente. Si dos
+    filas tienen mismo (TIPO, PV, NUM) pero distinto CUIT, son DOS comprobantes
+    distintos — el ERP reutilizó el número (caso Germinare: una ND a AGADIS
+    como ajuste contable interno + una ND legítima a ZILLI con el mismo
+    número). Sin esta protección, los montos se mezclan y se reporta una
+    diferencia falsa en la conciliación. Si el ERP no expone CUIT (vacío en
+    todas las filas), se mantiene el comportamiento legacy.
     """
     from collections import defaultdict as _dd2
+
+    def _cuit_norm(s):
+        return "".join(c for c in str(s or "") if c.isdigit())
+
     grupos: dict = _dd2(list)
     for r in registros:
-        grupos[r["key"]].append(r)
+        cuit = _cuit_norm(r.get("cuit_cliente", ""))
+        # Si no hay CUIT, usar cliente normalizado como fallback (case-insensitive).
+        # Si tampoco hay cliente, usar "" — se comporta como antes (un solo grupo).
+        clave_secundaria = cuit or str(r.get("cliente", "") or "").strip().upper()
+        grupos[(r["key"], clave_secundaria)].append(r)
 
     agregados = []
-    for key, rows in grupos.items():
+    for (key, _cli), rows in grupos.items():
         if len(rows) == 1:
             agregados.append(rows[0])
             continue
@@ -1285,14 +1301,44 @@ def _cruzar_comprobantes(gestion: list, arca: list) -> list:
     gestion_usados = set()  # id(r_gest) ya emparejados
 
     # ── Paso 1: Match exacto ─────────────────────────────────────────────────
+    # Cuando hay múltiples registros con la misma key (mismo TIPO-PV-NUM),
+    # preferir matchear gestión↔ARCA POR CUIT del cliente. Si solo hay un
+    # registro de cada lado, empareja directo (caso normal).
+    def _cuit_n(s):
+        return "".join(c for c in str(s or "") if c.isdigit())
+
     all_keys = set(arca_groups.keys()) | set(gestion_groups.keys())
     for key in all_keys:
-        a_list = arca_groups.get(key, [])
-        g_list = gestion_groups.get(key, [])
-        n = min(len(a_list), len(g_list))
-        for i in range(n):
-            r_arca = a_list[i]
-            r_gest = g_list[i]
+        a_list = list(arca_groups.get(key, []))
+        g_list = list(gestion_groups.get(key, []))
+        if not a_list or not g_list:
+            continue
+
+        # Si hay ambigüedad (más de un registro en cualquier lado), priorizar
+        # match por CUIT. Para los matcheados, sacar del pool. El resto va al
+        # emparejamiento por orden (legacy).
+        pares = []
+        if len(a_list) > 1 or len(g_list) > 1:
+            arca_remain = list(a_list)
+            gest_remain = list(g_list)
+            for r_arca in list(arca_remain):
+                cuit_a = _cuit_n(r_arca.get("cuit_cliente", ""))
+                if not cuit_a:
+                    continue
+                for r_gest in list(gest_remain):
+                    if _cuit_n(r_gest.get("cuit_cliente", "")) == cuit_a:
+                        pares.append((r_arca, r_gest))
+                        arca_remain.remove(r_arca)
+                        gest_remain.remove(r_gest)
+                        break
+            # Lo que sobró: emparejar por orden
+            n_resto = min(len(arca_remain), len(gest_remain))
+            for i in range(n_resto):
+                pares.append((arca_remain[i], gest_remain[i]))
+        else:
+            pares.append((a_list[0], g_list[0]))
+
+        for r_arca, r_gest in pares:
             diff = round(r_gest["monto_usd"] - r_arca["monto_usd_arca"], 2)
             estado = "OK" if abs(diff) <= 1.0 else "DIFERENCIA"
             arca_usados.add(id(r_arca))
