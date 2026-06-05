@@ -949,6 +949,14 @@ def _cruzar_crm(df_gestion: pd.DataFrame, df_crm: pd.DataFrame) -> List[Dict]:
         elif gr is not None:
             monto_g = float(gr["monto"] or 0)
             tipo = str(gr["tipo"]) or ("NC" if monto_g < 0 else "FC")
+            # Excluir filas SOLO_GESTION cuyo producto es un ajuste financiero
+            # o contable interno (DIFERENCIA DE COTIZACIÓN, CAMBIO DE TITULAR,
+            # HONORARIOS, etc.). Estos nunca van al CRM — si los incluimos como
+            # SOLO_GESTION generamos falsos positivos que confunden al auditor.
+            # Detectamos por el nombre del producto (mismo criterio que Paso 2).
+            prod_str = str(gr["productos"] or "").strip()
+            if prod_str and es_articulo_no_producto(prod_str):
+                continue  # ignorar — es ajuste interno, no venta Syngenta
             conciliacion.append({
                 "numero_comprobante": str(gr["numero"]),
                 "fecha": _fmt_fecha(gr["fecha"]),
