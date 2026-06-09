@@ -5,6 +5,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import ExpedientePage from './pages/Expediente'
 import AdminPage from './pages/Admin'
+import TestingPage from './pages/Testing'
 import Layout from './components/Layout/Layout'
 import Notifications from './components/Notifications'
 import UpdateBanner from './components/UpdateBanner'
@@ -43,6 +44,14 @@ export default function App() {
             element={
               <AdminRoute>
                 <AdminPage />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="testing"
+            element={
+              <AdminRoute>
+                <TestingPage />
               </AdminRoute>
             }
           />

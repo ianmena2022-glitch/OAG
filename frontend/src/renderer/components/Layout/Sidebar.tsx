@@ -1,6 +1,6 @@
 ﻿import React from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Settings, LogOut, Users, BookOpen } from 'lucide-react'
+import { LayoutDashboard, Settings, LogOut, Users, BookOpen, FlaskConical } from 'lucide-react'
 import { useAuthStore, isAdminRole } from '../../store'
 import { cn } from '../../lib/utils'
 
@@ -53,6 +53,22 @@ export default function Sidebar() {
         >
           <Settings size={15} />
           Administración
+        </NavLink>
+
+        <NavLink
+          to="/testing"
+          className={({ isActive }) =>
+            cn(
+              'flex items-center gap-2.5 px-3 py-2 rounded text-sm transition-colors',
+              isActive
+                ? 'bg-white/15 text-white font-medium'
+                : 'text-blue-200 hover:bg-white/10 hover:text-white',
+              !isAdminRole(user?.role) && 'hidden'
+            )
+          }
+        >
+          <FlaskConical size={15} />
+          Testing
         </NavLink>
       </nav>
 
