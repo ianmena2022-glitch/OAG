@@ -97,6 +97,8 @@ export const pasosAPI = {
     api.get(`/api/expedientes/${expId}/pasos/${paso}/descargar`, { responseType: 'blob' }),
   exportarPaso: (expId: number, paso: number) =>
     api.get(`/api/expedientes/${expId}/pasos/${paso}/exportar`, { responseType: 'blob' }),
+  exportarCompleto: (expId: number) =>
+    api.get(`/api/expedientes/${expId}/pasos/exportar-completo`, { responseType: 'blob' }),
 }
 
 // ── Anotaciones de Conciliación ───────────────────────────────────────────────

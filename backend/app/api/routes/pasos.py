@@ -1038,3 +1038,297 @@ def exportar_paso(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+# ── EXPORT COMPLETO (todos los pasos en un solo Excel) ────────────────────────
+
+@router.get("/exportar-completo")
+def exportar_completo(
+    exp_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Genera un único Excel con una hoja por paso ejecutado:
+      - Métricas: resumen numérico de todos los pasos
+      - P1 Conciliación ARCA: tipo/número/fecha/cliente/estado/montos
+      - P2 Clasificación: tabla de apertura mensual por cliente
+      - P2 Productos: ranking de productos con clasificación agro/Syngenta
+      - P3 Cruce CRM: conciliación gestión vs CRM por marca
+      - P4 Compras: detalle por proveedor con totales mensuales
+    Diseñado para comparar fácilmente con el Excel del auditor humano.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    exp = _get_exp(exp_id, db, current_user)
+
+    # Leer todos los resultados de una vez
+    todos = (
+        db.query(ResultadoPaso)
+        .filter(ResultadoPaso.expediente_id == exp_id)
+        .all()
+    )
+    data: dict[tuple, any] = {(r.paso, r.subtipo): r.datos for r in todos}
+
+    wb = Workbook()
+    wb.remove(wb.active)  # quitar hoja vacía default
+
+    # ── Estilos reutilizables ──────────────────────────────────────────────────
+    H_FILL  = PatternFill("solid", fgColor="1C2B3A")
+    H_FONT  = Font(color="FFFFFF", bold=True, size=9)
+    H_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    D_FONT  = Font(size=9)
+    D_ALIGN = Alignment(vertical="center")
+    Z_FILL  = PatternFill("solid", fgColor="F0F4F8")
+    OK_FILL = PatternFill("solid", fgColor="E6F4EA")
+    ER_FILL = PatternFill("solid", fgColor="FDECEA")
+    WA_FILL = PatternFill("solid", fgColor="FFF8E1")
+    BORDER  = Border(
+        left=Side(style="thin", color="DDE1E7"),
+        right=Side(style="thin", color="DDE1E7"),
+        top=Side(style="thin", color="DDE1E7"),
+        bottom=Side(style="thin", color="DDE1E7"),
+    )
+
+    def _write_header(ws, cols: list[str]):
+        for i, col in enumerate(cols, 1):
+            c = ws.cell(row=1, column=i, value=col)
+            c.fill = H_FILL; c.font = H_FONT
+            c.alignment = H_ALIGN; c.border = BORDER
+
+    def _write_row(ws, row_num: int, vals: list, fill=None):
+        for i, v in enumerate(vals, 1):
+            c = ws.cell(row=row_num, column=i, value=v)
+            c.font = D_FONT; c.alignment = D_ALIGN; c.border = BORDER
+            if fill:
+                c.fill = fill
+            elif row_num % 2 == 0:
+                c.fill = Z_FILL
+
+    def _autowidth(ws, max_w=50):
+        for col in ws.columns:
+            max_len = max((len(str(c.value or "")) for c in col), default=0)
+            ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 3, max_w)
+
+    def _freeze(ws):
+        ws.freeze_panes = "A2"
+
+    # ── Hoja: Métricas ────────────────────────────────────────────────────────
+    ws_m = wb.create_sheet("Métricas")
+    ws_m.sheet_properties.tabColor = "1A4A8A"
+
+    # Header de info
+    ws_m["A1"] = f"DS: {exp.nombre_distribuidor}"
+    ws_m["A1"].font = Font(bold=True, size=11)
+    ws_m["A2"] = f"CUIT: {exp.cuit_distribuidor or '—'}   Año: {exp.anio_analisis or '—'}"
+    ws_m["A2"].font = Font(size=9, color="666666")
+    ws_m["A3"] = f"Exportado: {datetime.utcnow().strftime('%d/%m/%Y %H:%M')} UTC"
+    ws_m["A3"].font = Font(size=9, color="666666")
+    ws_m.row_dimensions[1].height = 20
+    ws_m.append([])  # fila 4 vacía
+
+    _write_header(ws_m, ["Paso", "Métrica", "Valor"])
+    ws_m.column_dimensions["A"].width = 10
+    ws_m.column_dimensions["B"].width = 35
+    ws_m.column_dimensions["C"].width = 22
+
+    row = 6
+    def _metric_row(paso_num, label, value):
+        nonlocal row
+        ws_m.cell(row=row, column=1, value=f"Paso {paso_num}").font = D_FONT
+        ws_m.cell(row=row, column=2, value=label).font = D_FONT
+        ws_m.cell(row=row, column=3, value=value).font = D_FONT
+        for col in range(1, 4):
+            ws_m.cell(row=row, column=col).border = BORDER
+            if row % 2 == 0:
+                ws_m.cell(row=row, column=col).fill = Z_FILL
+        row += 1
+
+    # Paso 1
+    r1 = data.get((1, "resumen")) or {}
+    if r1:
+        _metric_row(1, "ARCA total",           r1.get("total_arca"))
+        _metric_row(1, "Gestión total",         r1.get("total_gestion"))
+        _metric_row(1, "Matcheados OK",         r1.get("ok"))
+        _metric_row(1, "Solo ARCA",             r1.get("solo_arca"))
+        _metric_row(1, "Solo Gestión",          r1.get("solo_gestion"))
+        _metric_row(1, "Internos",              r1.get("internos"))
+        _metric_row(1, "Monto ARCA (USD)",      round(r1.get("monto_total_arca_usd") or 0))
+        _metric_row(1, "Monto Gestión (USD)",   round(r1.get("monto_total_gestion_usd") or 0))
+    # Paso 2
+    t2 = data.get((2, "totales")) or {}
+    if t2:
+        _metric_row(2, "Total facturado (USD)", round(t2.get("total_facturado_usd") or 0))
+        _metric_row(2, "Total Syngenta (USD)",  round(t2.get("total_syngenta_usd") or 0))
+        _metric_row(2, "Total agroquímicos (USD)", round(t2.get("total_agroquimicos_usd") or 0))
+        fac = t2.get("total_facturado_usd") or 0
+        syn = t2.get("total_syngenta_usd") or 0
+        _metric_row(2, "% Syngenta",            f"{syn/fac*100:.1f}%" if fac else "—")
+    # Paso 3
+    r3 = data.get((3, "resumen")) or {}
+    if r3:
+        _metric_row(3, "Total filas CRM",       r3.get("total"))
+        _metric_row(3, "OK cruzados",           r3.get("ok"))
+        _metric_row(3, "Solo CRM",              r3.get("solo_crm"))
+        _metric_row(3, "Solo Gestión",          r3.get("solo_gestion"))
+        _metric_row(3, "Monto Gestión (USD)",   round(r3.get("monto_gestion_total_usd") or 0))
+        _metric_row(3, "Monto CRM (USD)",       round(r3.get("monto_crm_total_usd") or 0))
+    # Paso 4
+    t4 = data.get((4, "totales")) or {}
+    if t4:
+        _metric_row(4, "Total compras (USD)",   round(t4.get("total_compras_usd") or 0))
+
+    # ── Hoja: P1 Conciliación ─────────────────────────────────────────────────
+    conc1 = data.get((1, "conciliacion")) or []
+    if conc1:
+        ws1 = wb.create_sheet("P1 Conciliación")
+        COLS1 = ["Tipo", "Número", "Fecha", "Cliente", "Estado",
+                 "Monto ARCA (USD)", "Monto Gestión (USD)", "Diferencia (USD)", "Productos"]
+        _write_header(ws1, COLS1)
+        _freeze(ws1)
+        for i, row_d in enumerate(conc1, 2):
+            estado = str(row_d.get("estado") or "")
+            fill = (OK_FILL if estado == "OK"
+                    else ER_FILL if estado in ("SOLO_ARCA", "SOLO_GESTION")
+                    else WA_FILL if estado == "DIFERENCIA"
+                    else None)
+            _write_row(ws1, i, [
+                row_d.get("tipo"),
+                row_d.get("numero"),
+                row_d.get("fecha"),
+                row_d.get("cliente"),
+                estado,
+                round(row_d.get("monto_usd_arca") or 0, 2),
+                round(row_d.get("monto_usd_gestion") or 0, 2),
+                round(row_d.get("diferencia_usd") or 0, 2),
+                (row_d.get("productos") or "")[:80],
+            ], fill=fill if fill else None)
+        _autowidth(ws1)
+        ws1.sheet_properties.tabColor = "2E7D32"
+
+    # ── Hoja: P2 Tabla Apertura ───────────────────────────────────────────────
+    tabla2 = data.get((2, "tabla_apertura")) or []
+    if tabla2:
+        ws2a = wb.create_sheet("P2 Apertura mensual")
+        if tabla2:
+            cols2a = list(tabla2[0].keys())
+            _write_header(ws2a, cols2a)
+            _freeze(ws2a)
+            for i, row_d in enumerate(tabla2, 2):
+                _write_row(ws2a, i, [row_d.get(c) for c in cols2a])
+            _autowidth(ws2a)
+        ws2a.sheet_properties.tabColor = "1565C0"
+
+    # ── Hoja: P2 Productos ────────────────────────────────────────────────────
+    clas2 = data.get((2, "clasificacion")) or []
+    rank2 = data.get((2, "ranking_productos")) or []
+    prods_data = clas2 if clas2 else rank2
+    if prods_data:
+        ws2p = wb.create_sheet("P2 Productos")
+        if clas2:
+            COLS2P = ["Producto", "Agroquímico", "Syngenta", "Justificación"]
+            _write_header(ws2p, COLS2P)
+            _freeze(ws2p)
+            for i, row_d in enumerate(clas2, 2):
+                syng = str(row_d.get("syngenta") or "")
+                fill = (OK_FILL  if syng == "SI"
+                        else WA_FILL if syng == "REVISAR"
+                        else None)
+                _write_row(ws2p, i, [
+                    row_d.get("producto"),
+                    row_d.get("agroquimico"),
+                    syng,
+                    (row_d.get("justificacion") or "")[:100],
+                ], fill=fill)
+        else:
+            cols2p = list(rank2[0].keys()) if rank2 else []
+            _write_header(ws2p, cols2p)
+            _freeze(ws2p)
+            for i, row_d in enumerate(rank2, 2):
+                _write_row(ws2p, i, [row_d.get(c) for c in cols2p])
+        _autowidth(ws2p)
+        ws2p.sheet_properties.tabColor = "1565C0"
+
+    # ── Hoja: P3 Cruce CRM ────────────────────────────────────────────────────
+    conc3 = data.get((3, "conciliacion")) or []
+    if conc3:
+        ws3 = wb.create_sheet("P3 Cruce CRM")
+        # Detectar columnas disponibles dinámicamente
+        sample = conc3[0] if conc3 else {}
+        PRIORITY3 = ["marca_crm", "marca", "producto_crm", "cliente_crm", "cliente",
+                     "fecha_crm", "numero_crm", "tipo_crm", "estado",
+                     "monto_gestion", "monto_usd_gestion", "monto_crm", "monto_usd_crm",
+                     "diferencia", "diferencia_usd", "justificacion"]
+        cols3 = [c for c in PRIORITY3 if c in sample] or list(sample.keys())[:15]
+        LABELS3 = {
+            "marca_crm": "Marca", "marca": "Marca", "producto_crm": "Producto CRM",
+            "cliente_crm": "Cliente CRM", "cliente": "Cliente",
+            "fecha_crm": "Fecha", "numero_crm": "Número", "tipo_crm": "Tipo",
+            "estado": "Estado",
+            "monto_gestion": "Monto Gestión (USD)", "monto_usd_gestion": "Monto Gestión (USD)",
+            "monto_crm": "Monto CRM (USD)", "monto_usd_crm": "Monto CRM (USD)",
+            "diferencia": "Diferencia (USD)", "diferencia_usd": "Diferencia (USD)",
+            "justificacion": "Justificación IA",
+        }
+        _write_header(ws3, [LABELS3.get(c, c) for c in cols3])
+        _freeze(ws3)
+        for i, row_d in enumerate(conc3, 2):
+            estado = str(row_d.get("estado") or "")
+            fill = (OK_FILL if estado == "OK"
+                    else ER_FILL if estado in ("SOLO_CRM", "SOLO_GESTION")
+                    else WA_FILL if "DIF" in estado.upper()
+                    else None)
+            vals3 = []
+            for c in cols3:
+                v = row_d.get(c)
+                if isinstance(v, float): v = round(v, 2)
+                if isinstance(v, str) and len(v) > 100: v = v[:100]
+                vals3.append(v)
+            _write_row(ws3, i, vals3, fill=fill)
+        _autowidth(ws3)
+        ws3.sheet_properties.tabColor = "6A1B9A"
+
+    # ── Hoja: P4 Compras ──────────────────────────────────────────────────────
+    res4 = data.get((4, "resumen")) or []
+    if res4:
+        ws4 = wb.create_sheet("P4 Compras")
+        sample4 = res4[0] if res4 else {}
+        # Columnas fijas primero, luego dinámicas
+        FIXED4 = ["proveedor", "nombre_proveedor", "cuit", "cuit_proveedor",
+                  "Total", "total_usd", "categoria"]
+        avail4 = list(sample4.keys())
+        # Primero las fijas que existan, luego el resto
+        cols4 = [c for c in FIXED4 if c in sample4]
+        cols4 += [c for c in avail4 if c not in cols4]
+        LABELS4 = {
+            "proveedor": "Proveedor", "nombre_proveedor": "Proveedor",
+            "cuit": "CUIT", "cuit_proveedor": "CUIT",
+            "Total": "Total (USD)", "total_usd": "Total (USD)",
+            "categoria": "Categoría",
+        }
+        _write_header(ws4, [LABELS4.get(c, c) for c in cols4])
+        _freeze(ws4)
+        for i, row_d in enumerate(res4, 2):
+            vals4 = []
+            for c in cols4:
+                v = row_d.get(c)
+                if isinstance(v, float): v = round(v, 2)
+                vals4.append(v)
+            _write_row(ws4, i, vals4)
+        _autowidth(ws4)
+        ws4.sheet_properties.tabColor = "E65100"
+
+    # ── Serializar ────────────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    dist_slug = (exp.nombre_distribuidor or f"exp{exp_id}").replace(" ", "_")[:30]
+    fname = f"OAG_{dist_slug}_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )

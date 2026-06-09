@@ -4,7 +4,7 @@ import {
   Play, Square, Star, StarOff, CheckCircle, XCircle,
   AlertTriangle, Loader, ChevronDown, ChevronRight,
   RefreshCw, Minus, TrendingUp, TrendingDown, BarChart2,
-  Eye,
+  Eye, Download,
 } from 'lucide-react'
 import { expedientesAPI, pasosAPI } from '../../lib/api'
 import { cn } from '../../lib/utils'
@@ -379,6 +379,15 @@ function fmtMetric(v: MetricValue, fmt: Metric['fmt']): string {
   return String(v)
 }
 
+// ─── Descarga de archivos ─────────────────────────────────────────────────────
+
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a   = document.createElement('a')
+  a.href = url; a.download = filename; a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 // ─── Golden ───────────────────────────────────────────────────────────────────
 
 const GOLDEN_PREFIX = 'ogsa_golden_v2_'
@@ -634,6 +643,77 @@ function PasoRow({ result, golden }: { result: PasoResult; golden: GoldenData | 
   )
 }
 
+// ─── Botón de descarga completa ───────────────────────────────────────────────
+
+function DownloadButton({ expId, nombre }: { expId: number; nombre: string }) {
+  const [loading, setLoading] = useState(false)
+
+  const handleDownload = async () => {
+    setLoading(true)
+    try {
+      const res = await pasosAPI.exportarCompleto(expId)
+      const slug = nombre.replace(/\s+/g, '_').slice(0, 25)
+      const date = new Date().toISOString().slice(0, 10)
+      triggerDownload(new Blob([res.data]), `OAG_${slug}_${date}.xlsx`)
+    } catch (e) {
+      console.error('Export failed', e)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <button
+      title="Exportar todos los pasos como un solo Excel"
+      onClick={handleDownload}
+      disabled={loading}
+      className="p-1 rounded hover:bg-blue-50 text-gray-400 hover:text-oag-blue transition-colors disabled:opacity-50"
+    >
+      {loading
+        ? <Loader size={13} className="animate-spin" />
+        : <Download size={13} />}
+    </button>
+  )
+}
+
+// Exporta todos los DS seleccionados secuencialmente (uno por uno para no saturar)
+function ExportAllButton({ expIds, nombres }: { expIds: number[]; nombres: Record<number, string> }) {
+  const [loading, setLoading] = useState(false)
+  const [progress, setProgress] = useState(0)
+
+  const handleExportAll = async () => {
+    setLoading(true)
+    setProgress(0)
+    for (let i = 0; i < expIds.length; i++) {
+      const id     = expIds[i]
+      const nombre = nombres[id] ?? `exp_${id}`
+      try {
+        const res  = await pasosAPI.exportarCompleto(id)
+        const slug = nombre.replace(/\s+/g, '_').slice(0, 25)
+        const date = new Date().toISOString().slice(0, 10)
+        triggerDownload(new Blob([res.data]), `OAG_${slug}_${date}.xlsx`)
+      } catch (e) { console.error(`Export ${id} failed`, e) }
+      setProgress(i + 1)
+    }
+    setLoading(false)
+    setProgress(0)
+  }
+
+  if (expIds.length === 0) return null
+  return (
+    <button
+      onClick={handleExportAll}
+      disabled={loading}
+      title={`Exportar ${expIds.length} DS a Excel (uno por uno)`}
+      className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-oag-blue hover:bg-blue-50 rounded border border-blue-200 transition-colors disabled:opacity-60"
+    >
+      {loading
+        ? <><Loader size={11} className="animate-spin" /> {progress}/{expIds.length}</>
+        : <><Download size={11} /> Exportar {expIds.length > 1 ? `${expIds.length} DS` : 'DS'}</>}
+    </button>
+  )
+}
+
 // ─── Tarjeta por expediente ───────────────────────────────────────────────────
 
 function ExpCard({
@@ -716,9 +796,15 @@ function ExpCard({
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">✓ OK</span>
         )}
 
-        {/* Botones golden */}
+        {/* Botones golden + exportar */}
         <div className="flex items-center gap-1 ml-2" onClick={e => e.stopPropagation()}>
           {goldenDate && <span className="text-[10px] text-gray-400">⭐ {goldenDate}</span>}
+
+          {/* Exportar completo — siempre visible si hay al menos 1 paso ejecutado */}
+          {anyOk && (
+            <DownloadButton expId={result.expId} nombre={result.nombre} />
+          )}
+
           {allDone && anyOk && (
             <button title="Guardar como golden" onClick={onSaveGolden}
               className="p-1 rounded hover:bg-yellow-100 text-gray-400 hover:text-yellow-600 transition-colors">
@@ -1058,7 +1144,14 @@ export default function TestingPage() {
           {/* Resumen global */}
           {runState === 'done' && Object.keys(results).length > 0 && (
             <div className="bg-white rounded-lg border border-oag-border px-4 py-3">
-              <p className="text-xs font-semibold text-gray-500 mb-2">Resumen global</p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-gray-500">Resumen global</p>
+                {/* Exportar todos los DS seleccionados de un click */}
+                <ExportAllButton expIds={[...selectedExps]} nombres={
+                  expedientes
+                    .filter((e: any) => selectedExps.has(e.id))
+                    .reduce((acc: Record<number,string>, e: any) => { acc[e.id] = e.nombre_distribuidor; return acc }, {})
+                } /></div>
               <div className="flex flex-wrap gap-5 text-xs">
                 <span className={summary.ok > 0 ? 'text-green-700' : 'text-gray-400'}>
                   <CheckCircle size={11} className="inline mr-1" />{summary.ok} pasos OK
