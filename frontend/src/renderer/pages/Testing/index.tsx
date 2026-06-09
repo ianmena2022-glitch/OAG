@@ -57,6 +57,14 @@ function m(key: string, label: string, value: MetricValue,
   return { key, label, value, fmt, primary, group }
 }
 
+/** Lee la columna de monto total de una fila del resumen paso 4.
+ *  El backend puede usar "Total" (capital), "total_usd" o "monto_usd" según versión. */
+function _rowTotal(r: any): number {
+  return Math.round(
+    r?.Total ?? r?.total_usd ?? r?.monto_usd ?? 0
+  )
+}
+
 function extractMetrics(paso: number, ejec: any, res: any): PasoMetrics {
   // ejec = response de /ejecutar (limitado)
   // res  = response de /resultado (completo, puede ser igual si modo analizar)
@@ -234,44 +242,48 @@ function extractMetrics(paso: number, ejec: any, res: any): PasoMetrics {
 
   // ── Paso 4 ────────────────────────────────────────────────────────────────
   else if (paso === 4) {
-    const tot    = ejec?.totales    ?? res?.totales    ?? {}
-    const resumen = ejec?.resumen_top20 ?? res?.resumen ?? []
+    const tot    = ejec?.totales ?? res?.totales ?? {}
+    // /ejecutar devuelve resumen_top20 (primeros 20); /resultado devuelve resumen completo
+    const resumen: any[] = res?.resumen ?? ejec?.resumen_top20 ?? []
 
-    const totalCompras = Math.round(tot.total_compras_usd ?? 0)
-    const provCount    = resumen.length
+    const totalCompras  = Math.round(tot.total_compras_usd ?? 0)
+    // total_proveedores = todos los del archivo; proveedores_con_compras = los que tienen monto > 0
+    const totalProvs    = tot.total_proveedores   ?? resumen.length
+    const conCompras    = tot.proveedores_con_compras ?? resumen.filter((r: any) =>
+      Math.abs(_rowTotal(r)) > 0).length
 
     metrics.push(
-      m('total_compras_usd',  'Total compras',   totalCompras, 'usd',   true,  'Montos'),
-      m('proveedores_count',  'Proveedores',     provCount,    'count', true,  'Conteos'),
+      m('total_compras_usd',     'Total compras',        totalCompras, 'usd',   true,  'Montos'),
+      m('proveedores_count',     'Proveedores c/ compras', conCompras, 'count', true,  'Conteos'),
+      m('proveedores_total',     'Proveedores en archivo', totalProvs, 'count', false, 'Conteos'),
     )
 
-    // Top proveedor
+    // Top proveedor — la columna monto puede ser "Total" (paso4) o "total_usd"
     if (resumen.length > 0) {
-      const top = resumen[0]
-      const topUsd = Math.round(top.total_usd ?? top.monto_usd ?? 0)
-      const topPct = totalCompras > 0 ? +(topUsd / totalCompras * 100).toFixed(1) : null
+      // Ordenar por monto descendente para asegurar que [0] es el mayor
+      const sorted = [...resumen].sort((a, b) => _rowTotal(b) - _rowTotal(a))
+      const top    = sorted[0]
+      const topUsd = Math.round(_rowTotal(top))
+      const topPct = totalCompras > 0 ? +((topUsd / totalCompras) * 100).toFixed(1) : null
+      const topNom = (top.nombre_proveedor ?? top.proveedor ?? 'Proveedor 1').toString().slice(0, 28)
       metrics.push(
-        m('top_proveedor_usd', `Top: ${(top.proveedor ?? top.nombre_proveedor ?? 'Proveedor 1').toString().slice(0, 25)}`,
-          topUsd, 'usd', true, 'Top'),
+        m('top_proveedor_usd', `Top: ${topNom}`, topUsd, 'usd', true,  'Top'),
         m('top_proveedor_pct', '% top proveedor', topPct, 'pct', false, 'Top'),
       )
-    }
 
-    // Concentración: top3 / total
-    if (resumen.length >= 3) {
-      const top3 = resumen.slice(0, 3).reduce((s: number, r: any) =>
-        s + Math.round(r.total_usd ?? r.monto_usd ?? 0), 0)
-      const top3Pct = totalCompras > 0 ? +(top3 / totalCompras * 100).toFixed(1) : null
-      metrics.push(m('top3_pct', '% top 3 proveedores', top3Pct, 'pct', false, 'Concentración'))
-    }
+      // Concentración top 3
+      if (sorted.length >= 3) {
+        const top3    = sorted.slice(0, 3).reduce((s, r) => s + _rowTotal(r), 0)
+        const top3Pct = totalCompras > 0 ? +((top3 / totalCompras) * 100).toFixed(1) : null
+        metrics.push(m('top3_pct', '% top 3 proveedores', top3Pct, 'pct', false, 'Concentración'))
+      }
 
-    // Proveedores con NC/ND
-    const conNc = resumen.filter((r: any) =>
-      (r.nc_count ?? 0) > 0 || (r.nd_count ?? 0) > 0 ||
-      ((r.tipos ?? {}).__NC ?? 0) > 0 || ((r.tipos ?? {}).__ND ?? 0) > 0
-    ).length
-    if (conNc > 0) {
-      metrics.push(m('prov_con_nc_nd', 'Proveedores c/ NC/ND', conNc, 'count', false, 'Tipos'))
+      // Proveedores con NC/ND: buscar montos negativos en algún mes
+      const conNcNd = resumen.filter((r: any) =>
+        Object.values(r).some(v => typeof v === 'number' && v < -1)
+      ).length
+      if (conNcNd > 0)
+        metrics.push(m('prov_con_nc_nd', 'Proveedores c/ NC/ND', conNcNd, 'count', false, 'Tipos'))
     }
   }
 
