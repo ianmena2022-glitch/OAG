@@ -201,8 +201,10 @@ def ejecutar_paso4(
     nombres_unicos = {r.get("nombre_proveedor","") for r in resumen if r.get("nombre_proveedor")}
     con_compras = {r.get("nombre_proveedor","") for r in resumen
                    if r.get("nombre_proveedor") and abs(r.get("Total",0)) > 0}
+    # Usar .get() implícito vía .sum() con fallback por si df está vacío
+    total_compras_usd = round(float(df["monto_usd"].sum()), 2) if "monto_usd" in df.columns else 0.0
     totales = {
-        "total_compras_usd": round(df["monto_usd"].sum(), 2),
+        "total_compras_usd": total_compras_usd,
         "total_proveedores": len(nombres_unicos),
         "proveedores_con_compras": len(con_compras),
         "proveedores_sin_compras": len(nombres_unicos) - len(con_compras),
